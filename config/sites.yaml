@@ -1,0 +1,49 @@
+sites:
+
+  # ── WHOLE WEBSITE MONITORING ──────────────────────────────
+  - name: "Petromatad - Full Site"
+    url: "https://www.petromatadgroup.com"
+    monitor_type: "text"
+    mode: "whole_site"
+    interval_minutes: 720
+
+    crawl:
+      use_sitemap: true
+      max_pages: 100
+      stay_on_domain: true
+      exclude_patterns:
+        - "/cdn-cgi/"
+        - ".pdf"
+        - ".jpg"
+        - ".png"
+
+    ignore_selectors:
+      - ".stock-price"
+      - ".stock-widget"
+      - "#live-price"
+      - ".ticker"
+      - "header"
+      - "footer"
+      - ".cookie-notice"
+
+    notify:
+      - telegram
+      - email
+
+  # ── SPECIFIC PAGE MONITORING ───────────────────────────────
+  - name: "Petromatad - Investor Page"
+    url: "https://www.petromatadgroup.com/investors/stock-information/"
+    monitor_type: "text"
+    mode: "single_page"
+    interval_minutes: 60
+
+    watch_selectors:
+      - "main"
+
+    ignore_selectors:
+      - ".live-price"
+      - ".stock-chart"
+      - ".price-ticker"
+
+    notify:
+      - telegram
