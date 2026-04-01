@@ -1,0 +1,8 @@
+# Never upload these to GitHub
+.env
+data/
+*.db
+*.log
+__pycache__/
+*.pyc
+.DS_Store
