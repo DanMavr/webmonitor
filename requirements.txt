@@ -1,0 +1,12 @@
+requests
+beautifulsoup4
+playwright
+apscheduler
+python-telegram-bot==20.7
+pyyaml
+python-dotenv
+lxml
+Pillow
+flask
+rich
+numpy
