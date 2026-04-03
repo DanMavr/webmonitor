@@ -43,29 +43,26 @@ async def cmd_start():
     t = threading.Thread(target=start_dashboard, daemon=True)
     t.start()
 
-    # Show startup table
+    # Start Telegram bot commands in background
+    from monitor.bot import start_bot
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
+
+    # Show startup info using plain text only
     from monitor.scheduler import get_next_window_info
 
-    table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
-    table.add_column("Site", style="cyan")
-    table.add_column("Mode")
-    table.add_column("Schedule")
-    table.add_column("Notify")
+    console.print("\nWebMonitor Starting\n")
+    console.print(f"{'Site':<35} {'Mode':<15} {'Schedule'}")
+    console.print("-" * 80)
 
     for s in sites:
-        table.add_row(
-            s["name"],
-            s.get("mode", "single_page"),
-            get_next_window_info(s),
-            ", ".join(s.get("notify", []))
+        console.print(
+            f"{s['name']:<35} "
+            f"{s.get('mode', 'single_page'):<15} "
+            f"{get_next_window_info(s)}"
         )
 
-    console.print(Panel(
-        table,
-        title="[bold cyan]WebMonitor Starting[/bold cyan]",
-        subtitle="[dim]Dashboard → http://localhost:5000[/dim]",
-        border_style="cyan"
-    ))
+    console.print(f"\nDashboard available at http://localhost:5000")
 
     # Set up scheduler
     scheduler = AsyncIOScheduler()
@@ -74,7 +71,6 @@ async def cmd_start():
         schedule_type = site.get("schedule_type", "interval")
 
         if schedule_type == "interval":
-            # Simple case - just use the interval
             interval = site.get("interval_minutes", 60)
             scheduler.add_job(
                 check_site,
@@ -88,9 +84,6 @@ async def cmd_start():
             )
 
         elif schedule_type == "time_window":
-            # Find the smallest interval across all windows
-            # so we check frequently enough during the
-            # tightest window (e.g. every 1 minute for RNS)
             windows = site.get("windows", [])
             if windows:
                 min_interval = min(
@@ -111,11 +104,14 @@ async def cmd_start():
                 coalesce=True
             )
 
-            console.log(
-                f"  [dim]Time window schedule - "
-                f"polling every {min_interval}min, "
-                f"window logic handles the rest[/dim]"
-            )
+    scheduler.start()
+    console.print("\nRunning. Press Ctrl+C to stop.\n")
+
+    try:
+        await asyncio.Event().wait()
+    except (KeyboardInterrupt, SystemExit):
+        scheduler.shutdown()
+        console.print("\nStopped.")
 
 async def cmd_check():
     init_db()
