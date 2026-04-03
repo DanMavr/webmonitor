@@ -25,20 +25,6 @@ sites:
     notify:
       - telegram
 
-  - name: "Petromatad - Investor Page"
-    url: "https://www.petromatadgroup.com/investors/stock-information/"
-    monitor_type: "text"
-    mode: "single_page"
-    interval_minutes: 60
-    watch_selectors:
-      - "main"
-    ignore_selectors:
-      - ".live-price"
-      - ".stock-chart"
-      - ".price-ticker"
-    notify:
-      - telegram
-
   - name: "LSE - Petro Matad RNS"
     url: "https://www.londonstockexchange.com/stock/MATD/petro-matad-limited/analysis"
     monitor_type: "text"
