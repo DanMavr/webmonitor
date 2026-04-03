@@ -28,7 +28,6 @@ sites:
 
     notify:
       - telegram
-      - email
 
   # ── SPECIFIC PAGE MONITORING ───────────────────────────────
   - name: "Petromatad - Investor Page"
@@ -45,5 +44,33 @@ sites:
       - ".stock-chart"
       - ".price-ticker"
 
+    notify:
+      - telegram
+
+# LSE RNS PAGE - time window monitoring
+  - name: "LSE - Petro Matad RNS"
+    url: "https://www.londonstockexchange.com/stock/MATD/petro-matad-limited/analysis"
+    monitor_type: "text"
+    mode: "single_page"
+    schedule_type: "time_window"
+    timezone: "Europe/London"
+    windows:
+      - days: "mon-fri"
+        from: "06:59"
+        to: "07:10"
+        interval_minutes: 1
+      - days: "mon-fri"
+        from: "07:10"
+        to: "17:00"
+        interval_minutes: 5
+    ignore_selectors:
+      - ".price"
+      - ".stock-price"
+      - ".bid"
+      - ".offer"
+      - ".change"
+      - "header"
+      - "footer"
+      - "nav"
     notify:
       - telegram
