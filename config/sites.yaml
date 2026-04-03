@@ -1,12 +1,10 @@
 sites:
 
-  # ── WHOLE WEBSITE MONITORING ──────────────────────────────
   - name: "Petromatad - Full Site"
     url: "https://www.petromatadgroup.com"
     monitor_type: "text"
     mode: "whole_site"
     interval_minutes: 720
-
     crawl:
       use_sitemap: true
       max_pages: 100
@@ -16,7 +14,6 @@ sites:
         - ".pdf"
         - ".jpg"
         - ".png"
-
     ignore_selectors:
       - ".stock-price"
       - ".stock-widget"
@@ -25,29 +22,23 @@ sites:
       - "header"
       - "footer"
       - ".cookie-notice"
-
     notify:
       - telegram
 
-  # ── SPECIFIC PAGE MONITORING ───────────────────────────────
   - name: "Petromatad - Investor Page"
     url: "https://www.petromatadgroup.com/investors/stock-information/"
     monitor_type: "text"
     mode: "single_page"
     interval_minutes: 60
-
     watch_selectors:
       - "main"
-
     ignore_selectors:
       - ".live-price"
       - ".stock-chart"
       - ".price-ticker"
-
     notify:
       - telegram
 
-# LSE RNS PAGE - time window monitoring
   - name: "LSE - Petro Matad RNS"
     url: "https://www.londonstockexchange.com/stock/MATD/petro-matad-limited/analysis"
     monitor_type: "text"
@@ -63,12 +54,19 @@ sites:
         from: "07:10"
         to: "17:00"
         interval_minutes: 5
+    ignore_selectors:
+      - ".price"
+      - ".stock-price"
+      - ".bid"
+      - ".offer"
+      - ".change"
+      - "header"
+      - "footer"
+      - "nav"
     notify:
       - telegram
 
-
-# ENVOI
-- name: "Envoi - Mongolia Projects"
+  - name: "Envoi - Mongolia Projects"
     url: "https://envoi.co.uk/projects/active-projects/asia/mongolia/"
     monitor_type: "text"
     mode: "single_page"
@@ -80,7 +78,6 @@ sites:
     notify:
       - telegram
 
-# Mongolia energy ministry
   - name: "Mongolia Energy Ministry"
     url: "https://energy.gov.mn/home"
     monitor_type: "text"
@@ -93,7 +90,6 @@ sites:
     notify:
       - telegram
 
-# SUNSTEPPE SITE
   - name: "Sunsteppe - Full Site"
     url: "https://www.sunsteppe.com/"
     monitor_type: "text"
@@ -114,7 +110,6 @@ sites:
     notify:
       - telegram
 
-# EBRD PROJECTS
   - name: "EBRD - Projects RSS"
     url: "https://www.ebrd.com/rss/projects.xml"
     monitor_type: "text"
@@ -123,7 +118,6 @@ sites:
     notify:
       - telegram
 
-# EIB PROJECTS
   - name: "EIB - Projects RSS"
     url: "https://www.eib.org/en/rss/projects/all.xml"
     monitor_type: "text"
