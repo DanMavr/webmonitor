@@ -65,3 +65,69 @@ sites:
         interval_minutes: 5
     notify:
       - telegram
+
+
+# ENVOI
+- name: "Envoi - Mongolia Projects"
+    url: "https://envoi.co.uk/projects/active-projects/asia/mongolia/"
+    monitor_type: "text"
+    mode: "single_page"
+    interval_minutes: 480
+    ignore_selectors:
+      - "header"
+      - "footer"
+      - "nav"
+    notify:
+      - telegram
+
+# Mongolia energy ministry
+  - name: "Mongolia Energy Ministry"
+    url: "https://energy.gov.mn/home"
+    monitor_type: "text"
+    mode: "single_page"
+    interval_minutes: 480
+    ignore_selectors:
+      - "header"
+      - "footer"
+      - "nav"
+    notify:
+      - telegram
+
+# SUNSTEPPE SITE
+  - name: "Sunsteppe - Full Site"
+    url: "https://www.sunsteppe.com/"
+    monitor_type: "text"
+    mode: "whole_site"
+    interval_minutes: 480
+    crawl:
+      use_sitemap: true
+      max_pages: 50
+      stay_on_domain: true
+      exclude_patterns:
+        - ".pdf"
+        - ".jpg"
+        - ".png"
+    ignore_selectors:
+      - "header"
+      - "footer"
+      - "nav"
+    notify:
+      - telegram
+
+# EBRD PROJECTS
+  - name: "EBRD - Projects RSS"
+    url: "https://www.ebrd.com/rss/projects.xml"
+    monitor_type: "text"
+    mode: "single_page"
+    interval_minutes: 480
+    notify:
+      - telegram
+
+# EIB PROJECTS
+  - name: "EIB - Projects RSS"
+    url: "https://www.eib.org/en/rss/projects/all.xml"
+    monitor_type: "text"
+    mode: "single_page"
+    interval_minutes: 480
+    notify:
+      - telegram
