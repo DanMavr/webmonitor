@@ -123,10 +123,15 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def start_bot():
+    import asyncio
+
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         logger.warning("Telegram token not set, bot commands disabled")
         return
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("status", cmd_status))
