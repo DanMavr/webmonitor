@@ -67,30 +67,53 @@ async def cmd_start():
 
     # Set up scheduler
     scheduler = AsyncIOScheduler()
+
     for site in sites:
-        scheduler.add_job(
-            check_site,
-            "interval",
-            minutes=site.get("interval_minutes", 60),
-            args=[site],
-            id=site["name"],
-            next_run_time=datetime.now(),
-            max_instances=1,
-            coalesce=True
-        )
+        schedule_type = site.get("schedule_type", "interval")
 
-    scheduler.start()
-    console.print(
-        "[green]✓ Running.[/green] "
-        "Press [bold]Ctrl+C[/bold] to stop.\n"
-    )
+        if schedule_type == "interval":
+            # Simple case - just use the interval
+            interval = site.get("interval_minutes", 60)
+            scheduler.add_job(
+                check_site,
+                "interval",
+                minutes=interval,
+                args=[site],
+                id=site["name"],
+                next_run_time=datetime.now(),
+                max_instances=1,
+                coalesce=True
+            )
 
-    try:
-        await asyncio.Event().wait()
-    except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
-        console.print("\n[yellow]Stopped.[/yellow]")
+        elif schedule_type == "time_window":
+            # Find the smallest interval across all windows
+            # so we check frequently enough during the
+            # tightest window (e.g. every 1 minute for RNS)
+            windows = site.get("windows", [])
+            if windows:
+                min_interval = min(
+                    w.get("interval_minutes", 60)
+                    for w in windows
+                )
+            else:
+                min_interval = 60
 
+            scheduler.add_job(
+                check_site,
+                "interval",
+                minutes=min_interval,
+                args=[site],
+                id=site["name"],
+                next_run_time=datetime.now(),
+                max_instances=1,
+                coalesce=True
+            )
+
+            console.log(
+                f"  [dim]Time window schedule - "
+                f"polling every {min_interval}min, "
+                f"window logic handles the rest[/dim]"
+            )
 
 async def cmd_check():
     init_db()
