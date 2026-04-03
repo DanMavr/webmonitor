@@ -59,16 +59,34 @@ def extract_content(html: str, site: dict) -> str:
     return "\n".join(lines)
 
 
+def fetch_page(url: str, site: dict) -> tuple[str, str]:
+    """
+    Fetches a page and returns (content, checksum).
+    Uses only requests — no browser needed.
+    """
+    response = requests.get(url, headers=HEADERS, timeout=30)
+    response.raise_for_status()
+    content = extract_content(response.text, site)
+    checksum = hashlib.md5(content.encode()).hexdigest()
+    return content, checksum
+
+
 def compute_text_diff(old_text: str, new_text: str) -> dict:
     old_lines = old_text.splitlines()
     new_lines = new_text.splitlines()
 
-    diff = list(difflib.unified_diff(old_lines, new_lines, lineterm="", n=2))
+    diff = list(difflib.unified_diff(
+        old_lines, new_lines, lineterm="", n=2
+    ))
 
-    added = [l[1:] for l in diff if l.startswith("+")
-             and not l.startswith("+++")]
-    removed = [l[1:] for l in diff if l.startswith("-")
-               and not l.startswith("---")]
+    added = [
+        l[1:] for l in diff
+        if l.startswith("+") and not l.startswith("+++")
+    ]
+    removed = [
+        l[1:] for l in diff
+        if l.startswith("-") and not l.startswith("---")
+    ]
 
     ratio = difflib.SequenceMatcher(None, old_text, new_text).ratio()
 
@@ -89,12 +107,7 @@ async def check_single_url(url: str, site: dict) -> dict | None:
     Returns change info dict if changed, None if no change.
     """
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-
-        content = extract_content(resp.text, site)
-        checksum = hashlib.md5(content.encode()).hexdigest()
-
+        content, checksum = fetch_page(url, site)
         last = get_last_snapshot(site["name"], url)
 
         if last is None:
@@ -158,7 +171,6 @@ async def check_site(site: dict):
             log_job(name, "success", "No change")
             return
 
-        # Import here to avoid circular imports
         from monitor import notify
 
         if mode == "whole_site":
