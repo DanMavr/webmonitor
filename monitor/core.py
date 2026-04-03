@@ -146,10 +146,20 @@ async def check_single_url(url: str, site: dict) -> dict | None:
 async def check_site(site: dict):
     """
     Main function called by the scheduler for each site.
-    Handles both single_page and whole_site modes.
+    Now respects time windows before checking.
     """
+    from monitor.scheduler import is_in_window
+
     name = site["name"]
     mode = site.get("mode", "single_page")
+
+    # Check if we are inside an active monitoring window
+    should_check, interval = is_in_window(site)
+
+    if not should_check:
+        # Outside window - skip silently
+        logger.debug(f"Outside window, skipping: {name}")
+        return
 
     console.log(f"[cyan]Checking:[/cyan] {name}")
 
@@ -167,7 +177,7 @@ async def check_site(site: dict):
                 changes_found.append(result)
 
         if not changes_found:
-            console.log(f"  [dim]→ No changes[/dim]")
+            console.log(f"  [dim]-> No changes[/dim]")
             log_job(name, "success", "No change")
             return
 
@@ -185,5 +195,5 @@ async def check_site(site: dict):
                 f"{len(changes_found)} page(s) changed")
 
     except Exception as e:
-        console.log(f"[red]✗ Error:[/red] {name} — {e}")
+        console.log(f"[red]Error:[/red] {name} - {e}")
         log_job(name, "error", str(e))
