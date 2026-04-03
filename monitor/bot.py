@@ -56,10 +56,19 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ORDER BY timestamp DESC LIMIT 1
         """, (name,)).fetchone()
 
+        # Get the URL from snapshots
+        url = db.execute("""
+            SELECT url FROM snapshots
+            WHERE site_name = ?
+            ORDER BY timestamp DESC LIMIT 1
+        """, (name,)).fetchone()
+
         status = "OK" if last_status and last_status[0] == "success" else "Error"
         check_time = last_check[0][:16] if last_check else "Never"
+        url_str = url[0] if url else "Unknown"
 
         lines.append(f"Site: {name}")
+        lines.append(f"URL: {url_str}")
         lines.append(f"Last check: {check_time}")
         lines.append(f"Total changes: {total_changes}")
         lines.append(f"Status: {status}")
