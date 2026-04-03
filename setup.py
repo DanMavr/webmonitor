@@ -11,7 +11,6 @@ from pathlib import Path
 REQUIRED_PACKAGES = [
     "requests",
     "beautifulsoup4",
-    "playwright",
     "apscheduler",
     "python-telegram-bot==20.7",
     "pyyaml",
