@@ -125,3 +125,27 @@ sites:
     interval_minutes: 480
     notify:
       - telegram
+
+  - name: "Green Climate Fund - Projects"
+    url: "https://www.greenclimate.fund/projects"
+    monitor_type: "text"
+    mode: "single_page"
+    interval_minutes: 480
+    ignore_selectors:
+      - "header"
+      - "footer"
+      - "nav"
+    notify:
+      - telegram
+
+  - name: "Capital Markets Mongolia - Energy"
+    url: "https://capitalmarkets.mn/projects?tabValue=energy"
+    monitor_type: "text"
+    mode: "single_page"
+    interval_minutes: 480
+    ignore_selectors:
+      - "header"
+      - "footer"
+      - "nav"
+    notify:
+      - telegram
