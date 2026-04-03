@@ -44,17 +44,19 @@ async def cmd_start():
     t.start()
 
     # Show startup table
+    from monitor.scheduler import get_next_window_info
+
     table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
     table.add_column("Site", style="cyan")
     table.add_column("Mode")
-    table.add_column("Interval", justify="right")
+    table.add_column("Schedule")
     table.add_column("Notify")
 
     for s in sites:
         table.add_row(
             s["name"],
             s.get("mode", "single_page"),
-            f"{s.get('interval_minutes', 60)}m",
+            get_next_window_info(s),
             ", ".join(s.get("notify", []))
         )
 
