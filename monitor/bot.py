@@ -130,14 +130,27 @@ def start_bot():
         logger.warning("Telegram token not set, bot commands disabled")
         return
 
+    async def run():
+        app = Application.builder().token(token).build()
+        app.add_handler(CommandHandler("status", cmd_status))
+        app.add_handler(CommandHandler("changes", cmd_changes))
+        app.add_handler(CommandHandler("help", cmd_help))
+        app.add_handler(CommandHandler("check", cmd_check))
+
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+
+        # Keep running until stopped
+        while True:
+            await asyncio.sleep(1)
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("changes", cmd_changes))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("check", cmd_check))
-
-    logger.info("Telegram bot commands active")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        loop.run_until_complete(run())
+    except Exception as e:
+        logger.error(f"Bot error: {e}")
+    finally:
+        loop.close()
