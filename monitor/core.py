@@ -62,13 +62,40 @@ def extract_content(html: str, site: dict) -> str:
 def fetch_page(url: str, site: dict) -> tuple[str, str]:
     """
     Fetches a page and returns (content, checksum).
-    Uses only requests — no browser needed.
+    Automatically retries without SSL verification if certificate fails.
     """
-    response = requests.get(url, headers=HEADERS, timeout=30)
-    response.raise_for_status()
-    content = extract_content(response.text, site)
-    checksum = hashlib.md5(content.encode()).hexdigest()
-    return content, checksum
+    headers = HEADERS
+
+    # First attempt - normal with SSL verification
+    try:
+        response = requests.get(url, headers=headers, timeout=30, verify=True)
+        response.raise_for_status()
+        content = extract_content(response.text, site)
+        checksum = hashlib.md5(content.encode()).hexdigest()
+        return content, checksum
+
+    except requests.exceptions.SSLError:
+        # SSL certificate issue - retry without verification
+        logger.warning(f"SSL verification failed for {url}, retrying without verification")
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            response = requests.get(url, headers=headers, timeout=30, verify=False)
+            response.raise_for_status()
+            content = extract_content(response.text, site)
+            checksum = hashlib.md5(content.encode()).hexdigest()
+            return content, checksum
+        except Exception as e:
+            raise Exception(f"Failed even without SSL verification: {e}")
+
+    except requests.exceptions.ConnectionError as e:
+        raise Exception(f"Connection failed: {e}")
+
+    except requests.exceptions.Timeout:
+        raise Exception(f"Timed out connecting to {url}")
+
+    except requests.exceptions.HTTPError as e:
+        raise Exception(f"HTTP error {e.response.status_code}: {url}")
 
 
 def compute_text_diff(old_text: str, new_text: str) -> dict:
