@@ -97,7 +97,7 @@ sites:
       - telegram
 
   - name: "EBRD - Projects RSS"
-    url: "https://www.ebrd.com/rss/projects.xml"
+    url: "https://www.ebrd.com/home/what-we-do/projects.html#customtab-70eec7766a-item-4654c5d413-tab"
     monitor_type: "text"
     mode: "single_page"
     interval_minutes: 480
@@ -105,7 +105,7 @@ sites:
       - telegram
 
   - name: "EIB - Projects RSS"
-    url: "https://www.eib.org/en/rss/projects/all.xml"
+    url: "https://www.eib.org/en/projects/all/?q=&sortColumn=statusDate&sortDir=desc&pageNumber=0&itemPerPage=25&pageable=true&la=EN&deLa=EN&yearFrom=&orYearFrom=true&yearTo=&orYearTo=true&orStatus=true&orRegions=true&orCountries=true&orSectors=true"
     monitor_type: "text"
     mode: "single_page"
     interval_minutes: 480
