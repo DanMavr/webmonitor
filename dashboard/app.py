@@ -34,7 +34,7 @@ TEMPLATE = """
     .card .label  { font-size: 13px; color: #94a3b8; margin-top: 4px }
     table { width: 100%; border-collapse: collapse;
             background: #1e293b; border-radius: 12px;
-            overflow: hidden; margin-bottom: 40px }
+            overflow: hidden; margin-bottom: 16px }
     thead tr { background: #0f172a }
     th { text-align: left; padding: 12px 16px; font-size: 12px;
          color: #64748b; text-transform: uppercase;
@@ -62,13 +62,38 @@ TEMPLATE = """
       display: inline-block;
     }
     .btn-check:hover { background: #38bdf8 }
-    .btn-check:disabled { background: #334155; color: #64748b; cursor: not-allowed }
-    .flash { padding: 12px 16px; border-radius: 8px; margin-bottom: 24px;
-             font-size: 14px; font-weight: 500 }
-    .flash.success { background: #052e16; color: #22c55e;
-                     border: 1px solid #166534 }
-    .flash.error   { background: #450a0a; color: #f87171;
-                     border: 1px solid #991b1b }
+    .btn-check:disabled { background: #334155; color: #64748b;
+                          cursor: not-allowed }
+
+    /* Diff expand/collapse */
+    .diff-toggle {
+      background: none; border: none; color: #38bdf8;
+      font-size: 12px; cursor: pointer; padding: 0;
+      margin-top: 4px; display: block;
+    }
+    .diff-toggle:hover { color: #7dd3fc }
+    .diff-box {
+      display: none; margin-top: 8px; background: #0f172a;
+      border-radius: 6px; padding: 10px 12px;
+      font-family: monospace; font-size: 12px;
+      border: 1px solid #334155; white-space: pre-wrap;
+      max-height: 300px; overflow-y: auto;
+    }
+    .diff-box .added   { color: #22c55e }
+    .diff-box .removed { color: #f87171 }
+    .diff-box .meta    { color: #64748b }
+
+    /* Show more */
+    .show-more-row td {
+      text-align: center; padding: 12px;
+    }
+    .btn-show-more {
+      background: none; border: 1px solid #334155;
+      color: #94a3b8; padding: 6px 18px; border-radius: 6px;
+      font-size: 13px; cursor: pointer;
+    }
+    .btn-show-more:hover { border-color: #38bdf8; color: #38bdf8 }
+    .hidden-row { display: none }
   </style>
 </head>
 <body>
@@ -79,10 +104,6 @@ TEMPLATE = """
       Check All Now
     </button>
   </div>
-
-  {% if message %}
-  <div class="flash {{ message_type }}">{{ message }}</div>
-  {% endif %}
 
   <!-- Stats Row -->
   <div class="grid">
@@ -142,8 +163,7 @@ TEMPLATE = """
           {% elif site.status == "Error" %}
             <span class="badge error">Error</span>
           {% else %}
-            <span style="font-size:12px;
-                         color:#64748b">Pending</span>
+            <span style="font-size:12px;color:#64748b">Pending</span>
           {% endif %}
           <br>
           <a href="/inspect/{{ site.name }}"
@@ -171,7 +191,7 @@ TEMPLATE = """
     </thead>
     <tbody>
       {% for c in changes %}
-      <tr>
+      <tr class="{% if loop.index > 10 %}hidden-row extra-row{% endif %}">
         <td class="site">{{ c.site_name }}</td>
         <td>
           <a href="{{ c.url }}" target="_blank"
@@ -188,10 +208,53 @@ TEMPLATE = """
           {% else %}
             <span class="badge high">{{ c.change_pct }}% major</span>
           {% endif %}
+
+          {% if c.added or c.removed %}
+          <button class="diff-toggle"
+                  onclick="toggleDiff(this)">
+            ▶ Show what changed
+          </button>
+          <div class="diff-box">
+            {% if c.added %}
+            <div style="margin-bottom:6px;color:#64748b;font-size:11px">
+              ADDED ({{ c.added | length }} line{{ 's' if c.added | length != 1 }})
+            </div>
+            {% for line in c.added[:20] %}
+            <div class="added">+ {{ line }}</div>
+            {% endfor %}
+            {% if c.added | length > 20 %}
+            <div class="meta">... {{ c.added | length - 20 }} more lines</div>
+            {% endif %}
+            {% endif %}
+
+            {% if c.removed %}
+            <div style="margin-top:8px;margin-bottom:6px;
+                        color:#64748b;font-size:11px">
+              REMOVED ({{ c.removed | length }} line{{ 's' if c.removed | length != 1 }})
+            </div>
+            {% for line in c.removed[:20] %}
+            <div class="removed">- {{ line }}</div>
+            {% endfor %}
+            {% if c.removed | length > 20 %}
+            <div class="meta">... {{ c.removed | length - 20 }} more lines</div>
+            {% endif %}
+            {% endif %}
+          </div>
+          {% endif %}
         </td>
         <td style="font-size:13px">{{ c.timestamp }}</td>
       </tr>
       {% endfor %}
+
+      {% if changes | length > 10 %}
+      <tr class="show-more-row" id="showMoreRow">
+        <td colspan="4">
+          <button class="btn-show-more" onclick="showAll()">
+            Show {{ changes | length - 10 }} more
+          </button>
+        </td>
+      </tr>
+      {% endif %}
     </tbody>
   </table>
   {% else %}
@@ -210,14 +273,26 @@ TEMPLATE = """
       btn.textContent = "Checking...";
       fetch("/check-now", { method: "POST" })
         .then(res => res.json())
-        .then(data => {
-          window.location.reload();
-        })
+        .then(() => { window.location.reload(); })
         .catch(() => {
           btn.disabled = false;
           btn.textContent = "Check All Now";
           alert("Request failed — check service logs.");
         });
+    }
+
+    function toggleDiff(btn) {
+      const box = btn.nextElementSibling;
+      const open = box.style.display === "block";
+      box.style.display = open ? "none" : "block";
+      btn.textContent = open ? "▶ Show what changed" : "▼ Hide";
+    }
+
+    function showAll() {
+      document.querySelectorAll(".extra-row").forEach(r => {
+        r.style.display = "";
+      });
+      document.getElementById("showMoreRow").style.display = "none";
     }
   </script>
 
@@ -320,22 +395,38 @@ def index():
             "status": status,
         })
 
+    # Fetch changes including diff_text for inline display
     raw_changes = db.execute("""
-        SELECT site_name, url, change_pct, timestamp
+        SELECT site_name, url, change_pct, diff_text, timestamp
         FROM changes
-        ORDER BY timestamp DESC LIMIT 50
+        ORDER BY timestamp DESC LIMIT 100
     """).fetchall()
 
     changes = []
     for c in raw_changes:
         from urllib.parse import urlparse
+        import json
+
         path = urlparse(c["url"]).path or "/"
+
+        # Parse added/removed lines from stored diff_text
+        added = []
+        removed = []
+        if c["diff_text"]:
+            for line in c["diff_text"].splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    added.append(line[1:].strip())
+                elif line.startswith("-") and not line.startswith("---"):
+                    removed.append(line[1:].strip())
+
         changes.append({
             "site_name": c["site_name"],
             "url": c["url"],
             "short_url": path,
             "change_pct": c["change_pct"],
             "timestamp": c["timestamp"][:16],
+            "added": added,
+            "removed": removed,
         })
 
     total_pages = db.execute(
@@ -361,8 +452,6 @@ def index():
         monitored_sites=monitored_sites,
         changes=changes,
         stats=stats,
-        message=None,
-        message_type=None,
     )
 
 
