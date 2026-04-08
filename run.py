@@ -4,7 +4,8 @@ Usage:
   python run.py check    ← Run one immediate check
   python run.py status   ← Show current status table
 """
-
+import os
+from dotenv import load_dotenv
 import sys
 import asyncio
 import threading
@@ -22,6 +23,7 @@ from monitor.storage import init_db, log_job
 from monitor.core import check_site
 from dashboard.app import start_dashboard
 
+load_dotenv()
 console = Console()
 
 logging.basicConfig(
@@ -34,6 +36,74 @@ def load_sites() -> list:
     with open("config/sites.yaml") as f:
         return yaml.safe_load(f)["sites"]
 
+async def watchdog_check(sites: list):
+    """
+    Runs every hour. Checks if any site has gone silent
+    and alerts via Telegram if a site has not been checked
+    within 3x its expected interval.
+    """
+    import sqlite3
+    from datetime import datetime, timedelta
+    from monitor.scheduler import is_in_window
+
+    conn = sqlite3.connect("data/monitor.db")
+    conn.row_factory = sqlite3.Row
+
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    for site in sites:
+        name = site["name"]
+        schedule_type = site.get("schedule_type", "interval")
+
+        # Skip time window sites outside their window
+        if schedule_type == "time_window":
+            in_window, _ = is_in_window(site)
+            if not in_window:
+                continue
+
+        expected_interval = site.get("interval_minutes", 60)
+        max_silence = expected_interval * 3
+
+        last_check = conn.execute("""
+            SELECT timestamp FROM job_log
+            WHERE site_name = ?
+            ORDER BY timestamp DESC LIMIT 1
+        """, (name,)).fetchone()
+
+        if last_check is None:
+            continue
+
+        last_time = datetime.strptime(
+            last_check[0][:19], "%Y-%m-%d %H:%M:%S"
+        )
+        silence_minutes = (datetime.now() - last_time).total_seconds() / 60
+
+        if silence_minutes > max_silence:
+            console.log(
+                f"[red]WATCHDOG: {name} has not been checked "
+                f"for {int(silence_minutes)} minutes[/red]"
+            )
+
+            if token and chat_id:
+                import telegram
+                bot = telegram.Bot(token=token)
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"WATCHDOG ALERT\n\n"
+                            f"Site: {name}\n"
+                            f"Has not been checked for "
+                            f"{int(silence_minutes)} minutes\n"
+                            f"Expected every {expected_interval} minutes\n\n"
+                            f"The monitor may have stopped working for this site."
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Watchdog alert failed: {e}")
+
+    conn.close()
 
 async def cmd_start():
     init_db()
@@ -43,12 +113,15 @@ async def cmd_start():
     t = threading.Thread(target=start_dashboard, daemon=True)
     t.start()
 
-    # Start Telegram bot commands in background
-    from monitor.bot import start_bot
-    bot_thread = threading.Thread(target=start_bot, daemon=True)
-    bot_thread.start()
+    # Start Telegram bot in background
+    try:
+        from monitor.bot import start_bot
+        bot_thread = threading.Thread(target=start_bot, daemon=True)
+        bot_thread.start()
+        console.print("Telegram bot started")
+    except Exception as e:
+        console.print(f"Bot not started: {e}")
 
-    # Show startup info using plain text only
     from monitor.scheduler import get_next_window_info
 
     console.print("\nWebMonitor Starting\n")
@@ -62,15 +135,10 @@ async def cmd_start():
             f"{get_next_window_info(s)}"
         )
 
-    console.print(f"\nDashboard available at http://localhost:5000")
+    console.print("\nDashboard at http://localhost:5000\n")
 
-    # Set up scheduler with database persistence
-    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-    jobstores = {
-        "default": SQLAlchemyJobStore(url="sqlite:///data/scheduler.db")
-    }
-    scheduler = AsyncIOScheduler(jobstores=jobstores)
-    scheduler.remove_all_jobs()
+    # Set up scheduler
+    scheduler = AsyncIOScheduler()
 
     for site in sites:
         schedule_type = site.get("schedule_type", "interval")
@@ -109,8 +177,20 @@ async def cmd_start():
                 coalesce=True
             )
 
+    # Add watchdog job - runs every hour
+    scheduler.add_job(
+        watchdog_check,
+        "interval",
+        hours=1,
+        args=[sites],
+        id="watchdog",
+        next_run_time=datetime.now(),
+        max_instances=1,
+        coalesce=True
+    )
+
     scheduler.start()
-    console.print("\nRunning. Press Ctrl+C to stop.\n")
+    console.print("Running. Press Ctrl+C to stop.\n")
 
     try:
         await asyncio.Event().wait()
