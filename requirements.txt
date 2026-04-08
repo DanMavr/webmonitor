@@ -9,3 +9,4 @@ Pillow
 flask
 rich
 numpy
+sqlalchemy
