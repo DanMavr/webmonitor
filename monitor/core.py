@@ -1,6 +1,7 @@
 import hashlib
 import difflib
 import logging
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -23,6 +24,9 @@ HEADERS = {
         "AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
     )
 }
+
+CHROMIUM_BINARY  = "/usr/bin/chromium-browser"
+CHROMEDRIVER_BIN = "/usr/bin/chromedriver"
 
 
 def extract_content(html: str, site: dict) -> str:
@@ -98,6 +102,39 @@ def fetch_page(url: str, site: dict) -> tuple[str, str]:
         raise Exception(f"HTTP error {e.response.status_code}: {url}")
 
 
+def fetch_page_js(url: str, site: dict) -> tuple[str, str]:
+    """
+    Fetches a JS-rendered page using Selenium + system Chromium.
+    Used when a site has javascript: true in config.
+    """
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.binary_location = CHROMIUM_BINARY
+
+    service = Service(CHROMEDRIVER_BIN)
+    driver = webdriver.Chrome(service=service, options=options)
+
+    try:
+        driver.get(url)
+        # Wait for JS to render — use js_wait_seconds from config or default 5
+        wait = site.get("js_wait_seconds", 5)
+        time.sleep(wait)
+        html = driver.page_source
+    finally:
+        driver.quit()
+
+    content = extract_content(html, site)
+    checksum = hashlib.md5(content.encode()).hexdigest()
+    return content, checksum
+
+
 def compute_text_diff(old_text: str, new_text: str) -> dict:
     old_lines = old_text.splitlines()
     new_lines = new_text.splitlines()
@@ -138,7 +175,11 @@ async def check_single_url(url: str, site: dict) -> dict | None:
       {"error": True, "url": ..., "message": ...}  — fetch failed
     """
     try:
-        content, checksum = fetch_page(url, site)
+        if site.get("javascript"):
+            content, checksum = fetch_page_js(url, site)
+        else:
+            content, checksum = fetch_page(url, site)
+
         last = get_last_snapshot(site["name"], url)
 
         if last is None:
