@@ -66,7 +66,6 @@ def fetch_page(url: str, site: dict) -> tuple[str, str]:
     """
     headers = HEADERS
 
-    # First attempt - normal with SSL verification
     try:
         response = requests.get(url, headers=headers, timeout=30, verify=True)
         response.raise_for_status()
@@ -75,8 +74,9 @@ def fetch_page(url: str, site: dict) -> tuple[str, str]:
         return content, checksum
 
     except requests.exceptions.SSLError:
-        # SSL certificate issue - retry without verification
-        logger.warning(f"SSL verification failed for {url}, retrying without verification")
+        logger.warning(
+            f"SSL verification failed for {url}, retrying without verification"
+        )
         try:
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -129,48 +129,63 @@ def compute_text_diff(old_text: str, new_text: str) -> dict:
 
 
 async def check_single_url(url: str, site: dict) -> dict | None:
+    """
+    Checks one URL for changes.
+
+    Returns:
+      None                        — fetched cleanly, no change
+      {"url": ..., "diff": ...}   — fetched cleanly, change detected
+      {"error": True, "url": ..., "message": ...}  — fetch failed
+    """
     try:
         content, checksum = fetch_page(url, site)
         last = get_last_snapshot(site["name"], url)
 
         if last is None:
             save_snapshot(site["name"], url, content, checksum)
-            console.log(f"  [green]✓[/green] Baseline saved — [dim]{url[:60]}[/dim]")
+            console.log(
+                f"  [green]✓[/green] Baseline saved — "
+                f"[dim]{url[:60]}[/dim]"
+            )
             return None
 
         if last["checksum"] == checksum:
             return None
 
         diff = compute_text_diff(last["content"], content)
+
         if diff["change_percent"] < site.get("min_change_percent", 1):
             save_snapshot(site["name"], url, content, checksum)
             return None
 
         save_snapshot(site["name"], url, content, checksum)
-        save_change(site["name"], url, last["checksum"], checksum,
-                    str(diff["change_percent"]), diff["unified_diff"])
+        save_change(
+            site["name"], url,
+            last["checksum"], checksum,
+            str(diff["change_percent"]),
+            diff["unified_diff"]
+        )
         return {"url": url, "diff": diff}
 
     except Exception as e:
         logger.warning(f"Failed to check {url}: {e}")
-        return {"error": True, "url": url, "message": str(e)}  # ← changed
+        return {"error": True, "url": url, "message": str(e)}
 
 
 async def check_site(site: dict):
     """
     Main function called by the scheduler for each site.
-    Now respects time windows before checking.
+    Respects time windows before checking, and correctly
+    distinguishes fetch errors from clean no-change runs.
     """
     from monitor.scheduler import is_in_window
 
     name = site["name"]
     mode = site.get("mode", "single_page")
 
-    # Check if we are inside an active monitoring window
     should_check, interval = is_in_window(site)
 
     if not should_check:
-        # Outside window - skip silently
         logger.debug(f"Outside window, skipping: {name}")
         return
 
@@ -182,12 +197,33 @@ async def check_site(site: dict):
         if mode == "whole_site":
             console.log(f"  [dim]Found {len(urls)} pages[/dim]")
 
+        errors = []
         changes_found = []
 
         for url in urls:
             result = await check_single_url(url, site)
-            if result:
+            if result is None:
+                pass
+            elif result.get("error"):
+                errors.append(result)
+            else:
                 changes_found.append(result)
+
+        # All URLs failed — log as error
+        if errors and not changes_found:
+            error_msgs = "; ".join(
+                f"{r['url'][:50]}: {r['message']}" for r in errors
+            )
+            console.log(f"  [red]-> Fetch failed:[/red] {error_msgs}")
+            log_job(name, "error", f"Fetch failed: {error_msgs}")
+            return
+
+        # Some URLs failed but others were clean — warn and continue
+        if errors:
+            error_msgs = "; ".join(
+                f"{r['url'][:50]}: {r['message']}" for r in errors
+            )
+            logger.warning(f"Partial fetch errors for {name}: {error_msgs}")
 
         if not changes_found:
             console.log(f"  [dim]-> No changes[/dim]")
@@ -204,8 +240,7 @@ async def check_site(site: dict):
                 changes_found[0]["url"]
             )
 
-        log_job(name, "success",
-                f"{len(changes_found)} page(s) changed")
+        log_job(name, "success", f"{len(changes_found)} page(s) changed")
 
     except Exception as e:
         console.log(f"[red]Error:[/red] {name} - {e}")
