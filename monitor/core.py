@@ -39,16 +39,13 @@ def extract_content(html: str, site: dict) -> str:
     """
     soup = BeautifulSoup(html, "lxml")
 
-    # Always strip these
     for tag in soup(["script", "style", "meta", "noscript"]):
         tag.decompose()
 
-    # Remove ignored elements
     for selector in site.get("ignore_selectors", []):
         for el in soup.select(selector):
             el.decompose()
 
-    # Watch specific selectors only (if defined)
     watch = site.get("watch_selectors", [])
     if watch:
         parts = []
@@ -110,14 +107,12 @@ def fetch_page(url: str, site: dict) -> tuple[str, str]:
       3. javascript: true in config forces Selenium always,
          skipping the requests attempt entirely
     """
-    # Force JS mode if explicitly set in config
     if site.get("javascript"):
         logger.debug(f"JS mode forced for {url}")
         return fetch_page_js(url, site)
 
     min_words = site.get("min_content_words", MIN_CONTENT_WORDS_DEFAULT)
 
-    # Attempt 1 — requests (fast path)
     try:
         response = requests.get(url, headers=HEADERS, timeout=30, verify=True)
         response.raise_for_status()
@@ -128,7 +123,6 @@ def fetch_page(url: str, site: dict) -> tuple[str, str]:
             checksum = hashlib.md5(content.encode()).hexdigest()
             return content, checksum
 
-        # Content too thin — likely JS-rendered
         logger.info(
             f"Thin content ({word_count} words) from requests for {url} "
             f"— retrying with Selenium"
@@ -173,7 +167,6 @@ def fetch_page(url: str, site: dict) -> tuple[str, str]:
     except requests.exceptions.HTTPError as e:
         raise Exception(f"HTTP error {e.response.status_code}: {url}")
 
-    # Attempt 2 — Selenium JS fallback
     try:
         return fetch_page_js(url, site)
     except Exception as e:
@@ -236,8 +229,7 @@ async def check_single_url(url: str, site: dict) -> dict | None:
 
         last_word_count = len((last["content"] or "").split())
 
-        # Existing snapshot is thin/empty (bad baseline from before JS support)
-        # Replace it silently as a new baseline without triggering a notification
+        # Existing snapshot is thin/empty — replace silently as new baseline
         if last_word_count < min_words and word_count >= min_words:
             save_snapshot(site["name"], url, content, checksum)
             console.log(
@@ -247,15 +239,15 @@ async def check_single_url(url: str, site: dict) -> dict | None:
             )
             return None
 
-        # Both old and new are thin — nothing useful to compare
+        # Both old and new are thin — log as warning but don't error
+        # the whole site just because one page has low content
         if last_word_count < min_words and word_count < min_words:
             console.log(
-                f"  [yellow]⚠[/yellow] Still thin content "
+                f"  [yellow]⚠[/yellow] Thin content "
                 f"({word_count} words) — skipping — "
                 f"[dim]{url[:60]}[/dim]"
             )
-            return {"error": True, "url": url,
-                    "message": f"Thin content: only {word_count} words extracted"}
+            return None
 
         # Normal comparison
         if last["checksum"] == checksum:
@@ -281,22 +273,27 @@ async def check_single_url(url: str, site: dict) -> dict | None:
         return {"error": True, "url": url, "message": str(e)}
 
 
-async def check_site(site: dict):
+async def check_site(site: dict, force: bool = False):
     """
     Main function called by the scheduler for each site.
     Respects time windows before checking, and correctly
     distinguishes fetch errors from clean no-change runs.
+
+    force=True bypasses the time window check — used by
+    the dashboard "Check All Now" button.
     """
     from monitor.scheduler import is_in_window
 
     name = site["name"]
     mode = site.get("mode", "single_page")
 
-    should_check, interval = is_in_window(site)
-
-    if not should_check:
-        logger.debug(f"Outside window, skipping: {name}")
-        return
+    if not force:
+        should_check, interval = is_in_window(site)
+        if not should_check:
+            logger.debug(f"Outside window, skipping: {name}")
+            return
+    else:
+        console.log(f"  [dim](forced — bypassing time window)[/dim]")
 
     console.log(f"[cyan]Checking:[/cyan] {name}")
 
@@ -318,21 +315,25 @@ async def check_site(site: dict):
             else:
                 changes_found.append(result)
 
-        # All URLs failed — log as error
+        # Only error if ALL urls failed — partial failures are warnings
         if errors and not changes_found:
-            error_msgs = "; ".join(
-                f"{r['url'][:50]}: {r['message']}" for r in errors
-            )
-            console.log(f"  [red]-> Fetch failed:[/red] {error_msgs}")
-            log_job(name, "error", f"Fetch failed: {error_msgs}")
-            return
-
-        # Some URLs failed but others were clean — warn and continue
-        if errors:
-            error_msgs = "; ".join(
-                f"{r['url'][:50]}: {r['message']}" for r in errors
-            )
-            logger.warning(f"Partial fetch errors for {name}: {error_msgs}")
+            # Check if there were also successful (None) results
+            # If so, some pages were fine — don't mark as error
+            total_urls = len(urls)
+            error_count = len(errors)
+            if error_count == total_urls:
+                # Every single URL failed
+                error_msgs = "; ".join(
+                    f"{r['url'][:50]}: {r['message']}" for r in errors
+                )
+                console.log(f"  [red]-> All fetches failed:[/red] {error_msgs}")
+                log_job(name, "error", f"All fetches failed: {error_msgs}")
+                return
+            else:
+                # Some failed, some were just thin/skipped — still log success
+                logger.warning(
+                    f"{error_count}/{total_urls} pages had errors for {name}"
+                )
 
         if not changes_found:
             console.log(f"  [dim]-> No changes[/dim]")
