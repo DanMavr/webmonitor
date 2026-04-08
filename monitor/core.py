@@ -28,6 +28,9 @@ HEADERS = {
 CHROMIUM_BINARY  = "/usr/bin/chromium-browser"
 CHROMEDRIVER_BIN = "/usr/bin/chromedriver"
 
+# If requests returns fewer words than this, retry with Selenium
+MIN_CONTENT_WORDS_DEFAULT = 50
+
 
 def extract_content(html: str, site: dict) -> str:
     """
@@ -63,49 +66,11 @@ def extract_content(html: str, site: dict) -> str:
     return "\n".join(lines)
 
 
-def fetch_page(url: str, site: dict) -> tuple[str, str]:
-    """
-    Fetches a page and returns (content, checksum).
-    Automatically retries without SSL verification if certificate fails.
-    """
-    headers = HEADERS
-
-    try:
-        response = requests.get(url, headers=headers, timeout=30, verify=True)
-        response.raise_for_status()
-        content = extract_content(response.text, site)
-        checksum = hashlib.md5(content.encode()).hexdigest()
-        return content, checksum
-
-    except requests.exceptions.SSLError:
-        logger.warning(
-            f"SSL verification failed for {url}, retrying without verification"
-        )
-        try:
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            response = requests.get(url, headers=headers, timeout=30, verify=False)
-            response.raise_for_status()
-            content = extract_content(response.text, site)
-            checksum = hashlib.md5(content.encode()).hexdigest()
-            return content, checksum
-        except Exception as e:
-            raise Exception(f"Failed even without SSL verification: {e}")
-
-    except requests.exceptions.ConnectionError as e:
-        raise Exception(f"Connection failed: {e}")
-
-    except requests.exceptions.Timeout:
-        raise Exception(f"Timed out connecting to {url}")
-
-    except requests.exceptions.HTTPError as e:
-        raise Exception(f"HTTP error {e.response.status_code}: {url}")
-
-
 def fetch_page_js(url: str, site: dict) -> tuple[str, str]:
     """
     Fetches a JS-rendered page using Selenium + system Chromium.
-    Used when a site has javascript: true in config.
+    Called automatically when requests returns thin content,
+    or when javascript: true is set explicitly in config.
     """
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
@@ -123,7 +88,6 @@ def fetch_page_js(url: str, site: dict) -> tuple[str, str]:
 
     try:
         driver.get(url)
-        # Wait for JS to render — use js_wait_seconds from config or default 5
         wait = site.get("js_wait_seconds", 5)
         time.sleep(wait)
         html = driver.page_source
@@ -133,6 +97,87 @@ def fetch_page_js(url: str, site: dict) -> tuple[str, str]:
     content = extract_content(html, site)
     checksum = hashlib.md5(content.encode()).hexdigest()
     return content, checksum
+
+
+def fetch_page(url: str, site: dict) -> tuple[str, str]:
+    """
+    Fetches a page and returns (content, checksum).
+
+    Strategy:
+      1. Always try requests first (fast, lightweight)
+      2. If content is below min_content_words threshold,
+         automatically retry with Selenium (JS rendering)
+      3. javascript: true in config forces Selenium always,
+         skipping the requests attempt entirely
+    """
+    # Force JS mode if explicitly set in config
+    if site.get("javascript"):
+        logger.debug(f"JS mode forced for {url}")
+        return fetch_page_js(url, site)
+
+    min_words = site.get("min_content_words", MIN_CONTENT_WORDS_DEFAULT)
+
+    # Attempt 1 — requests (fast path)
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=30, verify=True)
+        response.raise_for_status()
+        content = extract_content(response.text, site)
+        word_count = len(content.split())
+
+        if word_count >= min_words:
+            checksum = hashlib.md5(content.encode()).hexdigest()
+            return content, checksum
+
+        # Content too thin — likely JS-rendered
+        logger.info(
+            f"Thin content ({word_count} words) from requests for {url} "
+            f"— retrying with Selenium"
+        )
+        console.log(
+            f"  [yellow]⚡ JS fallback[/yellow] — "
+            f"only {word_count} words via requests, retrying with Selenium"
+        )
+
+    except requests.exceptions.SSLError:
+        logger.warning(
+            f"SSL verification failed for {url}, retrying without verification"
+        )
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            response = requests.get(
+                url, headers=HEADERS, timeout=30, verify=False
+            )
+            response.raise_for_status()
+            content = extract_content(response.text, site)
+            word_count = len(content.split())
+
+            if word_count >= min_words:
+                checksum = hashlib.md5(content.encode()).hexdigest()
+                return content, checksum
+
+            logger.info(
+                f"Thin content ({word_count} words) after SSL retry for {url} "
+                f"— retrying with Selenium"
+            )
+
+        except Exception as e:
+            raise Exception(f"Failed even without SSL verification: {e}")
+
+    except requests.exceptions.ConnectionError as e:
+        raise Exception(f"Connection failed: {e}")
+
+    except requests.exceptions.Timeout:
+        raise Exception(f"Timed out connecting to {url}")
+
+    except requests.exceptions.HTTPError as e:
+        raise Exception(f"HTTP error {e.response.status_code}: {url}")
+
+    # Attempt 2 — Selenium JS fallback
+    try:
+        return fetch_page_js(url, site)
+    except Exception as e:
+        raise Exception(f"JS fallback also failed for {url}: {e}")
 
 
 def compute_text_diff(old_text: str, new_text: str) -> dict:
@@ -175,11 +220,7 @@ async def check_single_url(url: str, site: dict) -> dict | None:
       {"error": True, "url": ..., "message": ...}  — fetch failed
     """
     try:
-        if site.get("javascript"):
-            content, checksum = fetch_page_js(url, site)
-        else:
-            content, checksum = fetch_page(url, site)
-
+        content, checksum = fetch_page(url, site)
         last = get_last_snapshot(site["name"], url)
 
         if last is None:
