@@ -50,7 +50,6 @@ sites:
       - ".change"
       - "header"
       - "footer"
-      - "nav"
     notify:
       - telegram
 
