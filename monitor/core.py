@@ -129,45 +129,31 @@ def compute_text_diff(old_text: str, new_text: str) -> dict:
 
 
 async def check_single_url(url: str, site: dict) -> dict | None:
-    """
-    Checks one URL for changes.
-    Returns change info dict if changed, None if no change.
-    """
     try:
         content, checksum = fetch_page(url, site)
         last = get_last_snapshot(site["name"], url)
 
         if last is None:
             save_snapshot(site["name"], url, content, checksum)
-            console.log(
-                f"  [green]✓[/green] Baseline saved — "
-                f"[dim]{url[:60]}[/dim]"
-            )
+            console.log(f"  [green]✓[/green] Baseline saved — [dim]{url[:60]}[/dim]")
             return None
 
         if last["checksum"] == checksum:
             return None
 
-        # Change detected
         diff = compute_text_diff(last["content"], content)
-
         if diff["change_percent"] < site.get("min_change_percent", 1):
             save_snapshot(site["name"], url, content, checksum)
             return None
 
         save_snapshot(site["name"], url, content, checksum)
-        save_change(
-            site["name"], url,
-            last["checksum"], checksum,
-            str(diff["change_percent"]),
-            diff["unified_diff"]
-        )
-
+        save_change(site["name"], url, last["checksum"], checksum,
+                    str(diff["change_percent"]), diff["unified_diff"])
         return {"url": url, "diff": diff}
 
     except Exception as e:
         logger.warning(f"Failed to check {url}: {e}")
-        return None
+        return {"error": True, "url": url, "message": str(e)}  # ← changed
 
 
 async def check_site(site: dict):
