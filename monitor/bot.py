@@ -155,7 +155,6 @@ def start_bot():
         await app.start()
         await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
 
-        # Keep running until stopped
         while True:
             await asyncio.sleep(1)
 
