@@ -221,8 +221,11 @@ async def check_single_url(url: str, site: dict) -> dict | None:
     """
     try:
         content, checksum = fetch_page(url, site)
+        word_count = len(content.split())
+        min_words = site.get("min_content_words", MIN_CONTENT_WORDS_DEFAULT)
         last = get_last_snapshot(site["name"], url)
 
+        # No existing snapshot — save as fresh baseline
         if last is None:
             save_snapshot(site["name"], url, content, checksum)
             console.log(
@@ -231,6 +234,30 @@ async def check_single_url(url: str, site: dict) -> dict | None:
             )
             return None
 
+        last_word_count = len((last["content"] or "").split())
+
+        # Existing snapshot is thin/empty (bad baseline from before JS support)
+        # Replace it silently as a new baseline without triggering a notification
+        if last_word_count < min_words and word_count >= min_words:
+            save_snapshot(site["name"], url, content, checksum)
+            console.log(
+                f"  [green]✓[/green] Baseline replaced "
+                f"({last_word_count} → {word_count} words) — "
+                f"[dim]{url[:60]}[/dim]"
+            )
+            return None
+
+        # Both old and new are thin — nothing useful to compare
+        if last_word_count < min_words and word_count < min_words:
+            console.log(
+                f"  [yellow]⚠[/yellow] Still thin content "
+                f"({word_count} words) — skipping — "
+                f"[dim]{url[:60]}[/dim]"
+            )
+            return {"error": True, "url": url,
+                    "message": f"Thin content: only {word_count} words extracted"}
+
+        # Normal comparison
         if last["checksum"] == checksum:
             return None
 
