@@ -109,8 +109,12 @@ async def cmd_changes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "WebMonitor Commands\n\n"
-        "/status - Show all monitored sites\n"
-        "/changes - Show last 10 changes\n"
+        "/status - Show all monitored sites with URLs and last check time\n"
+        "/changes - Show last 10 changes detected\n"
+        "/check - Run an immediate check of all sites right now\n"
+        "/inspect - Show baseline health summary for all sites\n"
+        "/inspect SiteName - Show detailed baseline for one site\n"
+        "          Example: /inspect Petromatad - Full Site\n"
         "/help - Show this message"
     )
     await update.message.reply_text(text)
@@ -145,6 +149,7 @@ def start_bot():
         app.add_handler(CommandHandler("changes", cmd_changes))
         app.add_handler(CommandHandler("help", cmd_help))
         app.add_handler(CommandHandler("check", cmd_check))
+        app.add_handler(CommandHandler("inspect", cmd_inspect))
 
         await app.initialize()
         await app.start()
