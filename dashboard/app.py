@@ -1,6 +1,7 @@
-from flask import Flask, render_template_string, send_file
+from flask import Flask, render_template_string, send_file, redirect, url_for
 import sqlite3
 import yaml
+import asyncio
 from datetime import datetime
 
 app = Flask(__name__)
@@ -52,10 +53,36 @@ TEMPLATE = """
     .url    { color: #38bdf8; font-size: 12px }
     .empty  { text-align: center; padding: 60px; color: #475569 }
     .schedule { color: #94a3b8; font-size: 12px; margin-top: 2px }
+    .header-row { display: flex; align-items: center;
+                  justify-content: space-between; margin-bottom: 24px }
+    .btn-check {
+      background: #0ea5e9; color: #fff; border: none;
+      padding: 10px 20px; border-radius: 8px; font-size: 14px;
+      font-weight: 600; cursor: pointer; text-decoration: none;
+      display: inline-block;
+    }
+    .btn-check:hover { background: #38bdf8 }
+    .btn-check:disabled { background: #334155; color: #64748b; cursor: not-allowed }
+    .flash { padding: 12px 16px; border-radius: 8px; margin-bottom: 24px;
+             font-size: 14px; font-weight: 500 }
+    .flash.success { background: #052e16; color: #22c55e;
+                     border: 1px solid #166534 }
+    .flash.error   { background: #450a0a; color: #f87171;
+                     border: 1px solid #991b1b }
   </style>
 </head>
 <body>
-  <h1>Web<span>Monitor</span></h1>
+
+  <div class="header-row">
+    <h1>Web<span>Monitor</span></h1>
+    <button class="btn-check" id="checkBtn" onclick="runCheckNow()">
+      Check All Now
+    </button>
+  </div>
+
+  {% if message %}
+  <div class="flash {{ message_type }}">{{ message }}</div>
+  {% endif %}
 
   <!-- Stats Row -->
   <div class="grid">
@@ -103,20 +130,20 @@ TEMPLATE = """
           <div class="site">{{ site.name }}</div>
           <div class="url">{{ site.url }}</div>
         </td>
-        <td>{{ site.mode }}</td>
+        <td style="color:#94a3b8;font-size:13px">{{ site.mode }}</td>
         <td>
-          <div style="color:#e2e8f0">{{ site.schedule }}</div>
+          <div class="schedule">{{ site.schedule }}</div>
         </td>
         <td style="font-size:13px">{{ site.last_check }}</td>
-        <td>{{ site.total_changes }}</td>
+        <td style="font-size:13px">{{ site.total_changes }}</td>
         <td>
           {% if site.status == "OK" %}
             <span class="badge ok">OK</span>
           {% elif site.status == "Error" %}
             <span class="badge error">Error</span>
           {% else %}
-            <span class="badge" style="background:#1e293b;
-              color:#64748b">Pending</span>
+            <span style="font-size:12px;
+                         color:#64748b">Pending</span>
           {% endif %}
           <br>
           <a href="/inspect/{{ site.name }}"
@@ -175,6 +202,24 @@ TEMPLATE = """
     </p>
   </div>
   {% endif %}
+
+  <script>
+    function runCheckNow() {
+      const btn = document.getElementById("checkBtn");
+      btn.disabled = true;
+      btn.textContent = "Checking...";
+      fetch("/check-now", { method: "POST" })
+        .then(res => res.json())
+        .then(data => {
+          window.location.reload();
+        })
+        .catch(() => {
+          btn.disabled = false;
+          btn.textContent = "Check All Now";
+          alert("Request failed — check service logs.");
+        });
+    }
+  </script>
 
 </body>
 </html>
@@ -235,7 +280,6 @@ def index():
     db = get_db()
     config_sites = load_config()
 
-    # Build monitored sites list combining config + db data
     monitored_sites = []
     for site in config_sites:
         name = site["name"]
@@ -276,7 +320,6 @@ def index():
             "status": status,
         })
 
-    # Get recent changes
     raw_changes = db.execute("""
         SELECT site_name, url, change_pct, timestamp
         FROM changes
@@ -295,7 +338,6 @@ def index():
             "timestamp": c["timestamp"][:16],
         })
 
-    # Count total unique pages monitored
     total_pages = db.execute(
         "SELECT COUNT(DISTINCT url) FROM snapshots"
     ).fetchone()[0]
@@ -318,8 +360,28 @@ def index():
         TEMPLATE,
         monitored_sites=monitored_sites,
         changes=changes,
-        stats=stats
+        stats=stats,
+        message=None,
+        message_type=None,
     )
+
+
+@app.route("/check-now", methods=["POST"])
+def check_now():
+    from flask import jsonify
+    config_sites = load_config()
+
+    async def run_all():
+        from monitor.core import check_site
+        for site in config_sites:
+            await check_site(site)
+
+    try:
+        asyncio.run(run_all())
+        return jsonify({"status": "ok", "checked": len(config_sites)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @app.route("/inspect/<path:site_name>")
 def inspect_site(site_name):
@@ -376,7 +438,7 @@ def inspect_site(site_name):
       </style>
     </head>
     <body>
-      <a href="/" class="back">Back to dashboard</a>
+      <a href="/" class="back">← Back to dashboard</a>
       <h1>Inspect: <span>{{ summary.site_name }}</span></h1>
 
       <div class="stats">
@@ -436,6 +498,7 @@ def inspect_site(site_name):
     """
 
     return render_template_string(INSPECT_TEMPLATE, summary=summary)
+
 
 def start_dashboard():
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
