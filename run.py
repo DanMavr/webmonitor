@@ -64,8 +64,13 @@ async def cmd_start():
 
     console.print(f"\nDashboard available at http://localhost:5000")
 
-    # Set up scheduler
-    scheduler = AsyncIOScheduler()
+    # Set up scheduler with database persistence
+    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+    jobstores = {
+        "default": SQLAlchemyJobStore(url="sqlite:///data/scheduler.db")
+    }
+    scheduler = AsyncIOScheduler(jobstores=jobstores)
+    scheduler.remove_all_jobs()
 
     for site in sites:
         schedule_type = site.get("schedule_type", "interval")
