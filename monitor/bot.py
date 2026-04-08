@@ -163,3 +163,63 @@ def start_bot():
         logger.error(f"Bot error: {e}")
     finally:
         loop.close()
+
+async def cmd_inspect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /inspect - shows baseline health for all sites
+    /inspect SiteName - shows detail for one site
+    """
+    from monitor.inspect import get_baseline_summary, get_all_baselines_summary
+
+    args = context.args
+
+    if not args:
+        # Show summary of all sites
+        summaries = get_all_baselines_summary()
+
+        if not summaries:
+            await update.message.reply_text("No baselines found yet.")
+            return
+
+        lines = ["Baseline Health Check", ""]
+
+        for s in summaries:
+            health = "OK" if s["healthy_pages"] == s["total_pages"] else "WARNING"
+            lines.append(f"Site: {s['site_name']}")
+            lines.append(f"Pages: {s['total_pages']}")
+            lines.append(f"Total words captured: {s['total_words']}")
+            lines.append(f"Healthy pages: {s['healthy_pages']}/{s['total_pages']}")
+            lines.append(f"Status: {health}")
+            lines.append("")
+
+        await update.message.reply_text("\n".join(lines))
+
+    else:
+        # Show detail for specific site
+        site_name = " ".join(args)
+        summary = get_baseline_summary(site_name)
+
+        if "error" in summary:
+            await update.message.reply_text(summary["error"])
+            return
+
+        lines = [
+            f"Baseline: {summary['site_name']}",
+            f"Pages captured: {summary['total_pages']}",
+            f"Total words: {summary['total_words']}",
+            "",
+            "Page breakdown:",
+        ]
+
+        for page in summary["pages"][:10]:
+            status = "OK" if page["healthy"] else "EMPTY"
+            from urllib.parse import urlparse
+            path = urlparse(page["url"]).path or "/"
+            lines.append(f"{status} {path} ({page['word_count']} words)")
+            lines.append(f"     Preview: {page['preview'][:80]}...")
+            lines.append("")
+
+        if len(summary["pages"]) > 10:
+            lines.append(f"...and {len(summary['pages']) - 10} more pages")
+
+        await update.message.reply_text("\n".join(lines))
