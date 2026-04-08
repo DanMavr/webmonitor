@@ -3,10 +3,24 @@ import sqlite3
 import yaml
 import asyncio
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
 DB = "data/monitor.db"
 CONFIG = "config/sites.yaml"
+DISPLAY_TZ = ZoneInfo("Europe/Prague")
+
+
+def format_timestamp(ts: str) -> str:
+    """Convert a UTC timestamp string to Prague local time for display."""
+    if not ts:
+        return "Not yet"
+    try:
+        dt = datetime.fromisoformat(ts).replace(tzinfo=ZoneInfo("UTC"))
+        return dt.astimezone(DISPLAY_TZ).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return ts[:16]
+
 
 TEMPLATE = """
 <!DOCTYPE html>
@@ -84,9 +98,7 @@ TEMPLATE = """
     .diff-box .meta    { color: #64748b }
 
     /* Show more */
-    .show-more-row td {
-      text-align: center; padding: 12px;
-    }
+    .show-more-row td { text-align: center; padding: 12px }
     .btn-show-more {
       background: none; border: 1px solid #334155;
       color: #94a3b8; padding: 6px 18px; border-radius: 6px;
@@ -94,12 +106,17 @@ TEMPLATE = """
     }
     .btn-show-more:hover { border-color: #38bdf8; color: #38bdf8 }
     .hidden-row { display: none }
+
+    .tz-note { font-size: 11px; color: #475569; margin-top: 4px }
   </style>
 </head>
 <body>
 
   <div class="header-row">
-    <h1>Web<span>Monitor</span></h1>
+    <div>
+      <h1>Web<span>Monitor</span></h1>
+      <div class="tz-note">All times shown in Prague time (CEST)</div>
+    </div>
     <button class="btn-check" id="checkBtn" onclick="runCheckNow()">
       Check All Now
     </button>
@@ -382,14 +399,12 @@ def index():
         else:
             status = "Pending"
 
-        check_time = last_check[0][:16] if last_check else "Not yet"
-
         monitored_sites.append({
             "name": name,
             "url": site.get("url", ""),
             "mode": site.get("mode", "single_page"),
             "schedule": get_schedule_label(site),
-            "last_check": check_time,
+            "last_check": format_timestamp(last_check[0]) if last_check else "Not yet",
             "total_changes": total_changes,
             "status": status,
         })
@@ -417,7 +432,7 @@ def index():
             "url": c["url"],
             "short_url": path,
             "change_pct": c["change_pct"],
-            "timestamp": c["timestamp"][:16],
+            "timestamp": format_timestamp(c["timestamp"]),
             "added": added,
             "removed": removed,
         })
@@ -489,8 +504,7 @@ def inspect_site(site_name):
                font-family: system-ui, sans-serif; padding: 24px }
         h1 { font-size: 20px; margin-bottom: 8px; color: #f8fafc }
         h1 span { color: #38bdf8 }
-        h2 { font-size: 15px; color: #94a3b8;
-             margin: 32px 0 16px }
+        h2 { font-size: 15px; color: #94a3b8; margin: 32px 0 16px }
         .back { color: #38bdf8; font-size: 14px;
                 text-decoration: none; display: block;
                 margin-bottom: 24px }
