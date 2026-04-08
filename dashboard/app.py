@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, send_file, redirect, url_for
+from flask import Flask, render_template_string, send_file, redirect, url_for, jsonify
 import sqlite3
 import yaml
 import asyncio
@@ -210,8 +210,7 @@ TEMPLATE = """
           {% endif %}
 
           {% if c.added or c.removed %}
-          <button class="diff-toggle"
-                  onclick="toggleDiff(this)">
+          <button class="diff-toggle" onclick="toggleDiff(this)">
             ▶ Show what changed
           </button>
           <div class="diff-box">
@@ -395,7 +394,6 @@ def index():
             "status": status,
         })
 
-    # Fetch changes including diff_text for inline display
     raw_changes = db.execute("""
         SELECT site_name, url, change_pct, diff_text, timestamp
         FROM changes
@@ -405,11 +403,7 @@ def index():
     changes = []
     for c in raw_changes:
         from urllib.parse import urlparse
-        import json
-
         path = urlparse(c["url"]).path or "/"
-
-        # Parse added/removed lines from stored diff_text
         added = []
         removed = []
         if c["diff_text"]:
@@ -418,7 +412,6 @@ def index():
                     added.append(line[1:].strip())
                 elif line.startswith("-") and not line.startswith("---"):
                     removed.append(line[1:].strip())
-
         changes.append({
             "site_name": c["site_name"],
             "url": c["url"],
@@ -457,13 +450,12 @@ def index():
 
 @app.route("/check-now", methods=["POST"])
 def check_now():
-    from flask import jsonify
     config_sites = load_config()
 
     async def run_all():
         from monitor.core import check_site
         for site in config_sites:
-            await check_site(site)
+            await check_site(site, force=True)
 
     try:
         asyncio.run(run_all())
