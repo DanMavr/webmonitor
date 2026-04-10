@@ -11,7 +11,7 @@ import asyncio
 import threading
 import yaml
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from rich.console import Console
 from rich.table import Table
@@ -36,6 +36,7 @@ def load_sites() -> list:
     with open("config/sites.yaml") as f:
         return yaml.safe_load(f)["sites"]
 
+
 async def watchdog_check(sites: list):
     """
     Runs every hour. Checks if any site has gone silent
@@ -43,7 +44,7 @@ async def watchdog_check(sites: list):
     within 3x its expected interval.
     """
     import sqlite3
-    from datetime import datetime, timedelta
+    from datetime import datetime, timezone, timedelta
     from monitor.scheduler import is_in_window
 
     conn = sqlite3.connect("data/monitor.db")
@@ -77,8 +78,9 @@ async def watchdog_check(sites: list):
         last_time = datetime.strptime(
             last_check[0][:19], "%Y-%m-%d %H:%M:%S"
         )
-        from datetime import timezone
-          silence_minutes = (datetime.now(timezone.utc).replace(tzinfo=None) - last_time).total_seconds() / 60
+        silence_minutes = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - last_time
+        ).total_seconds() / 60
 
         if silence_minutes > max_silence:
             console.log(
@@ -102,9 +104,10 @@ async def watchdog_check(sites: list):
                         )
                     )
                 except Exception as e:
-                    logger.error(f"Watchdog alert failed: {e}")
+                    console.log(f"[red]Watchdog alert failed: {e}[/red]")
 
     conn.close()
+
 
 async def cmd_start():
     init_db()
@@ -138,7 +141,6 @@ async def cmd_start():
 
     console.print("\nDashboard at http://localhost:5000\n")
 
-    # Set up scheduler
     scheduler = AsyncIOScheduler()
 
     for site in sites:
@@ -178,7 +180,7 @@ async def cmd_start():
                 coalesce=True
             )
 
-    # Add watchdog job - runs every hour
+    # Watchdog runs every hour
     scheduler.add_job(
         watchdog_check,
         "interval",
@@ -198,6 +200,7 @@ async def cmd_start():
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
         console.print("\nStopped.")
+
 
 async def cmd_check():
     init_db()
@@ -246,35 +249,30 @@ def cmd_status():
             WHERE site_name = ? ORDER BY timestamp DESC LIMIT 1
         """, (name,)).fetchone()
 
-        if last_status and last_status[0] == "success":
-            status_str = "[green]✓ OK[/green]"
-        elif last_status:
-            status_str = "[red]✗ Error[/red]"
-        else:
-            status_str = "[dim]Not run yet[/dim]"
+        status = "–"
+        if last_status:
+            status = "✓ OK" if last_status[0] == "success" else "✗ Error"
 
         table.add_row(
             name,
-            last_check[0] if last_check else "[dim]Never[/dim]",
+            last_check[0][:16] if last_check else "Never",
             str(total),
-            status_str
+            status
         )
 
-    conn.close()
     console.print(table)
+    conn.close()
 
 
 if __name__ == "__main__":
-    command = sys.argv[1] if len(sys.argv) > 1 else "start"
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "start"
 
-    if command == "start":
+    if cmd == "start":
         asyncio.run(cmd_start())
-    elif command == "check":
+    elif cmd == "check":
         asyncio.run(cmd_check())
-    elif command == "status":
+    elif cmd == "status":
         cmd_status()
     else:
-        console.print(f"[red]Unknown command:[/red] {command}")
-        console.print(
-            "Usage: python run.py [bold][start|check|status][/bold]"
-        )
+        console.print(f"[red]Unknown command: {cmd}[/red]")
+        sys.exit(1)
