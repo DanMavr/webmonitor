@@ -2,7 +2,7 @@ sites:
 
   # ── Petromatad ──────────────────────────────────────────────────────────────
   - name: "Petromatad"
-    url: "https://www.petromatad.com"
+    url: "https://www.petromatadgroup.com"
     mode: whole_site
     schedule_type: interval
     interval_minutes: 720
@@ -88,6 +88,7 @@ sites:
   # ── Mongolia Energy Ministry ─────────────────────────────────────────────────
   - name: "Mongolia Energy Ministry"
     url: "https://energy.gov.mn"
+    ssl_verify: false
     mode: whole_site
     schedule_type: interval
     interval_minutes: 720
