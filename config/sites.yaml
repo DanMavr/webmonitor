@@ -37,7 +37,7 @@ sites:
 
   # ── LSE RNS ─────────────────────────────────────────────────────────────────
   - name: "LSE - RNS"
-    url: "https://www.londonstockexchange.com/stock/MTG/petrogrid/regulatory-news"
+    url: "https://www.londonstockexchange.com/stock/MATD/petro-matad-limited/analysis"
     mode: single_page
     schedule_type: time_window
     javascript: true
@@ -50,11 +50,7 @@ sites:
         from: "06:59"
         to: "07:10"
         interval_minutes: 5
-      - days: sat-sun
-        from: "09:00"
-        to: "13:00"
-        interval_minutes: 30
-    min_change_percent: 5
+    min_change_percent: 1
     ignore_selectors:
       - ".timestamp"
       - ".last-updated"
@@ -66,7 +62,7 @@ sites:
 
   # ── Envoi ────────────────────────────────────────────────────────────────────
   - name: "Envoi"
-    url: "https://www.envoienergy.com"
+    url: "https://envoi.co.uk/projects/active-projects/asia/mongolia/"
     mode: whole_site
     schedule_type: interval
     interval_minutes: 360
@@ -87,7 +83,7 @@ sites:
 
   # ── Mongolia Energy Ministry ─────────────────────────────────────────────────
   - name: "Mongolia Energy Ministry"
-    url: "https://energy.gov.mn"
+    url: "https://energy.gov.mn/home"
     ssl_verify: false
     mode: whole_site
     schedule_type: interval
@@ -132,7 +128,7 @@ sites:
   # Previously used a #fragment URL which requests cannot follow.
   # Now points to the stable project search page for Mongolia energy projects.
   - name: "EBRD - Mongolia Energy"
-    url: "https://www.ebrd.com/work-with-us/project-finance/project-summary-documents.html?1=1&filterCountry=Mongolia&filterSector=Energy"
+    url: "https://www.ebrd.com/home/what-we-do/projects.html?1=1&filterCountry=Mongolia&filterSector=Energy#customtab-70eec7766a-item-4654c5d413-tab"
     mode: single_page
     schedule_type: interval
     interval_minutes: 720
@@ -156,7 +152,7 @@ sites:
 
   # ── GCF ──────────────────────────────────────────────────────────────────────
   - name: "GCF - Mongolia"
-    url: "https://www.greenclimate.fund/projects/search#mongolia"
+    url: "https://www.greenclimate.fund/projects/"
     mode: single_page
     schedule_type: interval
     interval_minutes: 720
@@ -168,7 +164,7 @@ sites:
 
   # ── Capital Markets Mongolia ──────────────────────────────────────────────────
   - name: "Capital Markets Mongolia"
-    url: "https://www.capitalmarketsmongolia.com"
+    url: "https://capitalmarkets.mn/projects?tabValue=energy"
     mode: whole_site
     schedule_type: interval
     interval_minutes: 360
