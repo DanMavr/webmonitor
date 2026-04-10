@@ -2,6 +2,7 @@ import hashlib
 import difflib
 import logging
 import time
+import asyncio
 from pathlib import Path
 from datetime import datetime
 
@@ -28,15 +29,10 @@ HEADERS = {
 CHROMIUM_BINARY  = "/usr/bin/chromium-browser"
 CHROMEDRIVER_BIN = "/usr/bin/chromedriver"
 
-# If requests returns fewer words than this, retry with Selenium
 MIN_CONTENT_WORDS_DEFAULT = 50
 
 
 def extract_content(html: str, site: dict) -> str:
-    """
-    Extracts meaningful text from a page.
-    Respects watch_selectors and ignore_selectors from config.
-    """
     soup = BeautifulSoup(html, "lxml")
 
     for tag in soup(["script", "style", "meta", "noscript"]):
@@ -66,55 +62,47 @@ def extract_content(html: str, site: dict) -> str:
 async def fetch_page_js(url: str, site: dict) -> tuple[str, str]:
     """
     Fetches a JS-rendered page using Selenium + system Chromium.
-    Uses asyncio.sleep instead of time.sleep to avoid blocking
-    the event loop while waiting for JS to render.
+    Runs Selenium in a thread pool executor so the asyncio event
+    loop is never blocked while waiting for JS to render.
     """
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.chrome.service import Service
 
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.binary_location = CHROMIUM_BINARY
-
-    service = Service(CHROMEDRIVER_BIN)
-
-    # Run the blocking Selenium calls in a thread pool
-    # so the asyncio event loop is never blocked
-    loop = asyncio.get_event_loop()
+    wait = site.get("js_wait_seconds", 5)
 
     def run_selenium():
+        options = Options()
+        options.add_argument("--headless")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.binary_location = CHROMIUM_BINARY
+        service = Service(CHROMEDRIVER_BIN)
         driver = webdriver.Chrome(service=service, options=options)
         try:
             driver.get(url)
-            time.sleep(site.get("js_wait_seconds", 5))
+            time.sleep(wait)
             return driver.page_source
         finally:
             driver.quit()
 
+    loop = asyncio.get_event_loop()
     html = await loop.run_in_executor(None, run_selenium)
     content = extract_content(html, site)
     checksum = hashlib.md5(content.encode()).hexdigest()
     return content, checksum
 
 
-def fetch_page(url: str, site: dict) -> tuple[str, str]:
+async def fetch_page(url: str, site: dict) -> tuple[str, str]:
     """
     Fetches a page and returns (content, checksum).
-
-    Strategy:
-      1. Always try requests first (fast, lightweight)
-      2. If content is below min_content_words threshold,
-         automatically retry with Selenium (JS rendering)
-      3. javascript: true in config forces Selenium always,
-         skipping the requests attempt entirely
+    Tries requests first, falls back to Selenium if content is thin.
+    javascript: true in config forces Selenium always.
     """
     if site.get("javascript"):
         logger.debug(f"JS mode forced for {url}")
-        return fetch_page_js(url, site)
+        return await fetch_page_js(url, site)
 
     min_words = site.get("min_content_words", MIN_CONTENT_WORDS_DEFAULT)
 
@@ -173,7 +161,7 @@ def fetch_page(url: str, site: dict) -> tuple[str, str]:
         raise Exception(f"HTTP error {e.response.status_code}: {url}")
 
     try:
-        return fetch_page_js(url, site)
+        return await fetch_page_js(url, site)
     except Exception as e:
         raise Exception(f"JS fallback also failed for {url}: {e}")
 
@@ -209,21 +197,12 @@ def compute_text_diff(old_text: str, new_text: str) -> dict:
 
 
 async def check_single_url(url: str, site: dict) -> dict | None:
-    """
-    Checks one URL for changes.
-
-    Returns:
-      None                        — fetched cleanly, no change
-      {"url": ..., "diff": ...}   — fetched cleanly, change detected
-      {"error": True, "url": ..., "message": ...}  — fetch failed
-    """
     try:
-        content, checksum = fetch_page(url, site)
+        content, checksum = await fetch_page(url, site)
         word_count = len(content.split())
         min_words = site.get("min_content_words", MIN_CONTENT_WORDS_DEFAULT)
         last = get_last_snapshot(site["name"], url)
 
-        # No existing snapshot — save as fresh baseline
         if last is None:
             save_snapshot(site["name"], url, content, checksum)
             console.log(
@@ -234,7 +213,6 @@ async def check_single_url(url: str, site: dict) -> dict | None:
 
         last_word_count = len((last["content"] or "").split())
 
-        # Existing snapshot is thin/empty — replace silently as new baseline
         if last_word_count < min_words and word_count >= min_words:
             save_snapshot(site["name"], url, content, checksum)
             console.log(
@@ -244,8 +222,6 @@ async def check_single_url(url: str, site: dict) -> dict | None:
             )
             return None
 
-        # Both old and new are thin — log as warning but don't error
-        # the whole site just because one page has low content
         if last_word_count < min_words and word_count < min_words:
             console.log(
                 f"  [yellow]⚠[/yellow] Thin content "
@@ -254,7 +230,6 @@ async def check_single_url(url: str, site: dict) -> dict | None:
             )
             return None
 
-        # Normal comparison
         if last["checksum"] == checksum:
             return None
 
@@ -279,14 +254,6 @@ async def check_single_url(url: str, site: dict) -> dict | None:
 
 
 async def check_site(site: dict, force: bool = False):
-    """
-    Main function called by the scheduler for each site.
-    Respects time windows before checking, and correctly
-    distinguishes fetch errors from clean no-change runs.
-
-    force=True bypasses the time window check — used by
-    the dashboard "Check All Now" button.
-    """
     from monitor.scheduler import is_in_window
 
     name = site["name"]
@@ -320,14 +287,10 @@ async def check_site(site: dict, force: bool = False):
             else:
                 changes_found.append(result)
 
-        # Only error if ALL urls failed — partial failures are warnings
         if errors and not changes_found:
-            # Check if there were also successful (None) results
-            # If so, some pages were fine — don't mark as error
             total_urls = len(urls)
             error_count = len(errors)
             if error_count == total_urls:
-                # Every single URL failed
                 error_msgs = "; ".join(
                     f"{r['url'][:50]}: {r['message']}" for r in errors
                 )
@@ -335,7 +298,6 @@ async def check_site(site: dict, force: bool = False):
                 log_job(name, "error", f"All fetches failed: {error_msgs}")
                 return
             else:
-                # Some failed, some were just thin/skipped — still log success
                 logger.warning(
                     f"{error_count}/{total_urls} pages had errors for {name}"
                 )
