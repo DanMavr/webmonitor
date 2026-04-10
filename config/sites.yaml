@@ -47,8 +47,8 @@ sites:
       - telegram
     windows:
       - days: mon-fri
-        from: "07:10"
-        to: "17:00"
+        from: "06:59"
+        to: "07:10"
         interval_minutes: 5
       - days: sat-sun
         from: "09:00"
