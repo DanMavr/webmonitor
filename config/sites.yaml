@@ -45,28 +45,27 @@ sites:
     min_content_words: 20
     min_change_percent: 1
 
-  # ── LSE RNS ─────────────────────────────────────────────────────────────────
-  # URL confirmed correct by user — /analysis page contains the news table
-  # 75% of MATD RNS releases historically drop at 07:00-07:05 UK time
-  # Window 1: tight 1-minute burst around open to catch the 07:00 drop fast
-  # Window 2: full market hours at 5-min intervals for mid-day/close releases
- - name: LSE - RNS
-  url: https://api.londonstockexchange.com/api/gw/lse/instruments/alldata/MATD
-  mode: json_api
-  schedule_type: time_window
-  notify:
-  - telegram
-  timezone: Europe/London
-  json_fields:
-  - idnews
-  - subjectnews
-  - datelastnews
-  windows:
-  - days: mon-fri
-    from: 06:55
-    to: '17:00'
-    interval_minutes: 1
-  min_change_percent: 0.0
+ # ── LSE RNS ─────────────────────────────────────────────────────────────────
+  # Polls the LSE JSON API directly — no Selenium needed.
+  # Watches only idnews, subjectnews, datelastnews for clean RNS detection.
+  # Checks every 1 minute during market hours mon-fri 06:55-17:00 London time.
+  - name: "LSE - RNS"
+    url: "https://api.londonstockexchange.com/api/gw/lse/instruments/alldata/MATD"
+    mode: json_api
+    schedule_type: time_window
+    timezone: Europe/London
+    notify:
+      - telegram
+    json_fields:
+      - idnews
+      - subjectnews
+      - datelastnews
+    windows:
+      - days: mon-fri
+        from: '06:55'
+        to: '17:00'
+        interval_minutes: 1
+    min_change_percent: 0.0
 
   # ── Envoi ────────────────────────────────────────────────────────────────────
   - name: "Envoi"
