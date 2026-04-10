@@ -1,139 +1,189 @@
 sites:
 
-  - name: "Petromatad - Full Site"
-    url: "https://www.petromatadgroup.com"
-    monitor_type: "text"
-    mode: "whole_site"
+  # ── Petromatad ──────────────────────────────────────────────────────────────
+  - name: "Petromatad"
+    url: "https://www.petromatad.com"
+    mode: whole_site
+    schedule_type: interval
     interval_minutes: 720
-    crawl:
-      use_sitemap: true
-      max_pages: 100
-      stay_on_domain: true
-      exclude_patterns:
-        - "/cdn-cgi/"
-        - ".pdf"
-        - ".jpg"
-        - ".png"
-    ignore_selectors:
-      - ".stock-price"
-      - ".stock-widget"
-      - "#live-price"
-      - ".ticker"
-      - "header"
-      - "footer"
-      - ".cookie-notice"
     notify:
       - telegram
+    crawl:
+      use_sitemap: true
+      max_pages: 60
+      stay_on_domain: true
+      exclude_patterns:
+        - "/login"
+        - "/logout"
+        - "/search"
+        - "/tag/"
+        - "/page/"
+        - "/wp-json"
+        - "/feed"
+        - "/cart"
+        - "/account"
+        - ".pdf"
+        - ".jpg"
+        - ".jpeg"
+        - ".png"
+        - ".gif"
+        - ".zip"
+        - ".doc"
+        - ".docx"
+        - ".xls"
+        - ".xlsx"
+    min_content_words: 80
+    min_change_percent: 3
 
-  - name: "LSE - Petro Matad RNS"
-    url: "https://www.londonstockexchange.com/stock/MATD/petro-matad-limited/analysis"
+  # ── LSE RNS ─────────────────────────────────────────────────────────────────
+  - name: "LSE - RNS"
+    url: "https://www.londonstockexchange.com/stock/MTG/petrogrid/regulatory-news"
+    mode: single_page
+    schedule_type: time_window
     javascript: true
-    js_wait_seconds: 10
-    min_change_percent: 5
-    monitor_type: "text"
-    mode: "single_page"
-    schedule_type: "time_window"
+    js_wait_seconds: 8
     timezone: "Europe/London"
+    notify:
+      - telegram
     windows:
-      - days: "mon-fri"
-        from: "06:59"
-        to: "07:10"
-        interval_minutes: 1
-      - days: "mon-fri"
+      - days: mon-fri
         from: "07:10"
         to: "17:00"
         interval_minutes: 5
+      - days: sat-sun
+        from: "09:00"
+        to: "13:00"
+        interval_minutes: 30
+    min_change_percent: 5
     ignore_selectors:
-      - ".price"
-      - ".stock-price"
-      - ".bid"
-      - ".offer"
-      - ".change"
-      - "header"
-      - "footer"
+      - ".timestamp"
+      - ".last-updated"
+      - ".market-data"
+      - ".price-ticker"
+      - "[data-testid='time']"
+      - "[data-testid='price']"
+      - "time"
+
+  # ── Envoi ────────────────────────────────────────────────────────────────────
+  - name: "Envoi"
+    url: "https://www.envoienergy.com"
+    mode: whole_site
+    schedule_type: interval
+    interval_minutes: 360
     notify:
       - telegram
-
-  - name: "Envoi - Mongolia Projects"
-    url: "https://envoi.co.uk/projects/active-projects/asia/mongolia/"
-    monitor_type: "text"
-    mode: "single_page"
-    interval_minutes: 480
-    ignore_selectors:
-      - "header"
-      - "footer"
-      - "nav"
-    notify:
-      - telegram
-
-  - name: "Mongolia Energy Ministry"
-    url: "https://energy.gov.mn/home"
-    monitor_type: "text"
-    mode: "single_page"
-    interval_minutes: 480
-    ignore_selectors:
-      - "header"
-      - "footer"
-      - "nav"
-    notify:
-      - telegram
-
-  - name: "Sunsteppe - Full Site"
-    url: "https://www.sunsteppe.com/"
-    monitor_type: "text"
-    mode: "whole_site"
-    interval_minutes: 480
     crawl:
       use_sitemap: true
-      max_pages: 50
+      max_pages: 40
       stay_on_domain: true
       exclude_patterns:
+        - "/login"
+        - "/search"
         - ".pdf"
         - ".jpg"
         - ".png"
-    ignore_selectors:
-      - "header"
-      - "footer"
-      - "nav"
-    notify:
-      - telegram
+    min_content_words: 50
+    min_change_percent: 3
 
-  - name: "EBRD - Projects RSS"
-    url: "https://www.ebrd.com/home/what-we-do/projects.html#customtab-70eec7766a-item-4654c5d413-tab"
-    monitor_type: "text"
-    mode: "single_page"
-    interval_minutes: 480
+  # ── Mongolia Energy Ministry ─────────────────────────────────────────────────
+  - name: "Mongolia Energy Ministry"
+    url: "https://energy.gov.mn"
+    mode: whole_site
+    schedule_type: interval
+    interval_minutes: 720
     notify:
       - telegram
+    crawl:
+      use_sitemap: true
+      max_pages: 40
+      stay_on_domain: true
+      exclude_patterns:
+        - "/login"
+        - "/search"
+        - ".pdf"
+        - ".jpg"
+        - ".png"
+    min_content_words: 30
+    min_change_percent: 3
 
-  - name: "EIB - Projects RSS"
-    url: "https://www.eib.org/en/projects/all/?q=&sortColumn=statusDate&sortDir=desc&pageNumber=0&itemPerPage=25&pageable=true&la=EN&deLa=EN&yearFrom=&orYearFrom=true&yearTo=&orYearTo=true&orStatus=true&orRegions=true&orCountries=true&orSectors=true"
-    monitor_type: "text"
-    mode: "single_page"
-    interval_minutes: 480
+  # ── Sunsteppe ────────────────────────────────────────────────────────────────
+  - name: "Sunsteppe"
+    url: "https://www.sunsteppe.com"
+    mode: whole_site
+    schedule_type: interval
+    interval_minutes: 720
     notify:
       - telegram
+    crawl:
+      use_sitemap: true
+      max_pages: 30
+      stay_on_domain: true
+      exclude_patterns:
+        - "/login"
+        - "/search"
+        - ".pdf"
+        - ".jpg"
+        - ".png"
+    min_content_words: 50
+    min_change_percent: 3
 
-  - name: "Green Climate Fund - Projects"
-    url: "https://www.greenclimate.fund/projects"
-    monitor_type: "text"
-    mode: "single_page"
-    interval_minutes: 480
-    ignore_selectors:
-      - "header"
-      - "footer"
-      - "nav"
+  # ── EBRD ─────────────────────────────────────────────────────────────────────
+  # Previously used a #fragment URL which requests cannot follow.
+  # Now points to the stable project search page for Mongolia energy projects.
+  - name: "EBRD - Mongolia Energy"
+    url: "https://www.ebrd.com/work-with-us/project-finance/project-summary-documents.html?1=1&filterCountry=Mongolia&filterSector=Energy"
+    mode: single_page
+    schedule_type: interval
+    interval_minutes: 720
     notify:
       - telegram
+    min_content_words: 50
+    min_change_percent: 2
 
-  - name: "Capital Markets Mongolia - Energy"
-    url: "https://capitalmarkets.mn/projects?tabValue=energy"
-    monitor_type: "text"
-    mode: "single_page"
-    interval_minutes: 480
-    ignore_selectors:
-      - "header"
-      - "footer"
-      - "nav"
+  # ── EIB ──────────────────────────────────────────────────────────────────────
+  # Previously used an unstable pageable query URL.
+  # Now points to the stable project search filtered to Mongolia.
+  - name: "EIB - Mongolia"
+    url: "https://www.eib.org/en/projects/loans/index.htm?q=mongolia&sortColumn=statusDate&sortDir=desc"
+    mode: single_page
+    schedule_type: interval
+    interval_minutes: 720
     notify:
       - telegram
+    min_content_words: 50
+    min_change_percent: 2
+
+  # ── GCF ──────────────────────────────────────────────────────────────────────
+  - name: "GCF - Mongolia"
+    url: "https://www.greenclimate.fund/projects/search#mongolia"
+    mode: single_page
+    schedule_type: interval
+    interval_minutes: 720
+    javascript: true
+    js_wait_seconds: 6
+    notify:
+      - telegram
+    min_change_percent: 2
+
+  # ── Capital Markets Mongolia ──────────────────────────────────────────────────
+  - name: "Capital Markets Mongolia"
+    url: "https://www.capitalmarketsmongolia.com"
+    mode: whole_site
+    schedule_type: interval
+    interval_minutes: 360
+    notify:
+      - telegram
+    crawl:
+      use_sitemap: true
+      max_pages: 40
+      stay_on_domain: true
+      exclude_patterns:
+        - "/login"
+        - "/search"
+        - "/tag/"
+        - "/page/"
+        - ".pdf"
+        - ".jpg"
+        - ".png"
+    min_content_words: 50
+    min_change_percent: 3
