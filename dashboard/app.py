@@ -887,6 +887,11 @@ def form_to_site(form) -> tuple[dict | None, str]:
         "notify": ["telegram"],
     }
 
+    # Target selector
+    target_sel = form.get("target_selector", "").strip()
+    if target_sel:
+        site["target_selector"] = target_sel
+
     # SSL
     if form.get("ssl_verify") == "false":
         site["ssl_verify"] = False
@@ -1161,12 +1166,25 @@ SITE_FORM_TEMPLATE = """
             <div class="hint">Changes smaller than this percentage are ignored.</div>
           </div>
           <div class="field">
+            <label>Target selector <span style="color:#38bdf8;font-size:11px;font-weight:400;margin-left:6px">Focus monitoring on one section only</span></label>
+            <input type="text" name="target_selector"
+                   value="{{ site.target_selector or '' }}"
+                   placeholder=".news-table-results-component">
+            <div class="hint">
+              CSS selector for the <strong>only</strong> part of the page to monitor.
+              Everything outside this element is completely ignored.<br>
+              Leave blank to monitor the whole page.<br>
+              Example — LSE RNS table only: <code>.news-table-results-component</code>
+            </div>
+          </div>
+
+          <div class="field">
             <label>Ignore selectors (one per line)</label>
             <textarea name="ignore_selectors"
                       placeholder=".timestamp&#10;.price-ticker&#10;[data-testid='time']"
                       >{{ ignore_selectors_text or '' }}</textarea>
             <div class="hint">CSS selectors for elements to exclude from change detection
-              (clocks, live prices, etc.).</div>
+              (clocks, live prices, etc.). Used together with target selector if set.</div>
           </div>
         </div>
       </div>
