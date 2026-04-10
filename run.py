@@ -10,7 +10,11 @@ import sys
 import asyncio
 import logging
 import threading
+import warnings
+import urllib3
 from datetime import datetime, timezone
+
+warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
 
 import yaml
 from dotenv import load_dotenv
