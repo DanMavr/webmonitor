@@ -1302,22 +1302,33 @@ SITE_FORM_TEMPLATE = """
           }
 
           function renderFieldCheckboxes(fields, saved) {
-            const container = document.getElementById('json-fields-list');
+            var container = document.getElementById('json-fields-list');
             container.innerHTML = '';
-            fields.forEach(f => {
-              const isChecked = saved.length === 0
-                ? false
-                : saved.includes(f.key);
-              const row = document.createElement('div');
+            fields.forEach(function(f) {
+              var isChecked = saved.length > 0 && saved.indexOf(f.key) >= 0;
+              var row = document.createElement('div');
               row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid #1e293b';
-              row.innerHTML = \`
-                <input type="checkbox" id="jf_\${f.key}" value="\${f.key}"
-                       \${isChecked ? 'checked' : ''}
-                       onchange="updateJsonFieldsRaw()"
-                       style="width:16px;height:16px;cursor:pointer">
-                <label for="jf_\${f.key}" style="flex:0 0 220px;font-family:monospace;font-size:13px;color:#38bdf8;cursor:pointer">\${f.key}</label>
-                <span style="font-size:13px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">\${f.value}</span>
-              \`;
+
+              var cb = document.createElement('input');
+              cb.type = 'checkbox';
+              cb.id = 'jf_' + f.key;
+              cb.value = f.key;
+              cb.checked = isChecked;
+              cb.onchange = updateJsonFieldsRaw;
+              cb.style.cssText = 'width:16px;height:16px;cursor:pointer;flex-shrink:0';
+
+              var lbl = document.createElement('label');
+              lbl.htmlFor = 'jf_' + f.key;
+              lbl.textContent = f.key;
+              lbl.style.cssText = 'flex:0 0 220px;font-family:monospace;font-size:13px;color:#38bdf8;cursor:pointer';
+
+              var val = document.createElement('span');
+              val.textContent = f.value;
+              val.style.cssText = 'font-size:13px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+
+              row.appendChild(cb);
+              row.appendChild(lbl);
+              row.appendChild(val);
               container.appendChild(row);
             });
             updateJsonFieldsRaw();
