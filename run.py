@@ -5,17 +5,17 @@ Usage:
   python run.py status   ← Show current status table
 """
 import os
-from dotenv import load_dotenv
+import re
 import sys
 import asyncio
-import threading
-import yaml
 import logging
+import threading
 from datetime import datetime, timezone
 
+import yaml
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
 from rich import box
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -26,135 +26,157 @@ from dashboard.app import start_dashboard
 load_dotenv()
 console = Console()
 
+# ── Logging setup ────────────────────────────────────────────────────────────
 
-class ActivityFileHandler(logging.FileHandler):
+class ActivityFileHandler(logging.Handler):
     """
-    Writes INFO+ log records to data/activity.log with timestamps.
-    Each line: 2026-04-10 09:14:42 [LEVEL] message
+    Writes INFO+ monitor activity to data/activity.log.
+    Strips ANSI colour codes that Rich injects into log messages.
     """
-    def emit(self, record):
-        record.msg = self._strip_ansi(str(record.msg))
-        super().emit(record)
+    _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
-    @staticmethod
-    def _strip_ansi(text: str) -> str:
-        import re
-        text = re.sub(r'\x1b\[[0-9;]*m', '', text)
-        text = re.sub(r'\[[a-z/ _]+\]', '', text)
-        return text.strip()
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg = self.format(record)
+            msg = self._ANSI_RE.sub("", msg)
+            with open("data/activity.log", "a") as f:
+                f.write(msg + "\n")
+        except Exception:
+            pass   # never let a logging failure crash the app
 
 
-# Error/warning log (existing)
+# Root logger — WARNING+ errors to monitor.log
 logging.basicConfig(
     level=logging.WARNING,
     handlers=[logging.FileHandler("data/monitor.log")]
 )
 
-# Activity log — captures INFO and above from the monitor logger
-activity_logger = logging.getLogger("monitor")
-activity_logger.setLevel(logging.INFO)
-
-activity_handler = ActivityFileHandler("data/activity.log")
-activity_handler.setLevel(logging.INFO)
-activity_handler.setFormatter(
-    logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
-                      datefmt="%Y-%m-%d %H:%M:%S")
+# "monitor" logger — INFO+ activity to activity.log
+_activity_handler = ActivityFileHandler()
+_activity_handler.setLevel(logging.INFO)
+_activity_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s %(message)s")
 )
-activity_logger.addHandler(activity_handler)
 
+monitor_logger = logging.getLogger("monitor")
+monitor_logger.setLevel(logging.INFO)
+monitor_logger.addHandler(_activity_handler)
+monitor_logger.propagate = False   # don't double-log to root WARNING handler
+
+# Module-level logger for run.py itself
+logger = logging.getLogger(__name__)
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def load_sites() -> list:
     with open("config/sites.yaml") as f:
         return yaml.safe_load(f)["sites"]
 
 
+def _get_effective_interval(site: dict) -> int:
+    """
+    Return the effective minimum check interval in minutes for a site.
+    For time_window sites, reads the smallest window interval.
+    For interval sites, reads interval_minutes directly.
+    """
+    schedule_type = site.get("schedule_type", "interval")
+
+    if schedule_type == "time_window":
+        windows = site.get("windows", [])
+        if windows:
+            return min(w.get("interval_minutes", 60) for w in windows)
+        return 60
+
+    return site.get("interval_minutes", 60)
+
+
+# ── Watchdog ──────────────────────────────────────────────────────────────────
+
 async def watchdog_check(sites: list):
     """
-    Runs every hour. Checks if any site has gone silent
-    and alerts via Telegram if a site has not been checked
-    within 3x its expected interval.
+    Runs every hour. Alerts via Telegram if any site has not been checked
+    within 3× its expected interval.
     """
     import sqlite3
-    from datetime import datetime, timezone, timedelta
     from monitor.scheduler import is_in_window
 
-    conn = sqlite3.connect("data/monitor.db")
-    conn.row_factory = sqlite3.Row
-
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    token   = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
-    for site in sites:
-        name = site["name"]
-        schedule_type = site.get("schedule_type", "interval")
+    with sqlite3.connect("data/monitor.db") as conn:
+        conn.row_factory = sqlite3.Row
 
-        if schedule_type == "time_window":
-            in_window, _ = is_in_window(site)
-            if not in_window:
-                continue
+        for site in sites:
+            name          = site["name"]
+            schedule_type = site.get("schedule_type", "interval")
 
-        expected_interval = site.get("interval_minutes", 60)
-        max_silence = expected_interval * 3
+            # Don't alert for time-window sites that are outside their window
+            if schedule_type == "time_window":
+                in_window, _ = is_in_window(site)
+                if not in_window:
+                    continue
 
-        last_check = conn.execute("""
-            SELECT timestamp FROM job_log
-            WHERE site_name = ?
-            ORDER BY timestamp DESC LIMIT 1
-        """, (name,)).fetchone()
+            expected_interval = _get_effective_interval(site)
+            max_silence       = expected_interval * 3
 
-        if last_check is None:
-            continue
+            row = conn.execute(
+                """
+                SELECT timestamp FROM job_log
+                WHERE site_name = ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                (name,)
+            ).fetchone()
 
-        last_time = datetime.strptime(
-            last_check[0][:19], "%Y-%m-%d %H:%M:%S"
-        )
-        silence_minutes = (
-            datetime.now(timezone.utc).replace(tzinfo=None) - last_time
-        ).total_seconds() / 60
+            if row is None:
+                continue   # site hasn't run yet — not a watchdog concern
 
-        if silence_minutes > max_silence:
-            msg = (
-                f"WATCHDOG: {name} has not been checked "
-                f"for {int(silence_minutes)} minutes "
-                f"(expected every {expected_interval} min)"
-            )
-            console.log(f"[red]{msg}[/red]")
-            activity_logger.warning(msg)
+            # Parse stored UTC timestamp and keep it timezone-aware
+            last_time = datetime.strptime(
+                row["timestamp"][:19], "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=timezone.utc)
 
-            if token and chat_id:
-                import telegram
-                bot = telegram.Bot(token=token)
-                try:
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=(
-                            f"WATCHDOG ALERT\n\n"
-                            f"Site: {name}\n"
-                            f"Has not been checked for "
-                            f"{int(silence_minutes)} minutes\n"
-                            f"Expected every {expected_interval} minutes\n\n"
-                            f"The monitor may have stopped working for this site."
-                        )
-                    )
-                except Exception as e:
-                    console.log(f"[red]Watchdog alert failed: {e}[/red]")
+            silence_minutes = (
+                datetime.now(timezone.utc) - last_time
+            ).total_seconds() / 60
 
-    conn.close()
+            if silence_minutes > max_silence:
+                msg = (
+                    f"WATCHDOG ALERT\n\n"
+                    f"Site: {name}\n"
+                    f"Silent for: {int(silence_minutes)} minutes\n"
+                    f"Expected every: {expected_interval} minutes\n\n"
+                    f"The monitor may have stopped working for this site."
+                )
+                console.log(f"[red]WATCHDOG: {name} silent {int(silence_minutes)}min[/red]")
+                logger.warning(f"Watchdog: {name} silent {int(silence_minutes)}min")
 
+                if token and chat_id:
+                    import telegram
+                    bot = telegram.Bot(token=token)
+                    try:
+                        await bot.send_message(chat_id=chat_id, text=msg)
+                    except Exception as e:
+                        logger.error(f"Watchdog Telegram alert failed: {e}")
+
+
+# ── Commands ──────────────────────────────────────────────────────────────────
 
 async def cmd_start():
     init_db()
     sites = load_sites()
 
+    # Flask dashboard in background thread
     t = threading.Thread(target=start_dashboard, daemon=True)
     t.start()
 
+    # Telegram bot in background thread
     try:
         from monitor.bot import start_bot
         bot_thread = threading.Thread(target=start_bot, daemon=True)
         bot_thread.start()
         console.print("Telegram bot started")
-        activity_logger.info("Telegram bot started")
     except Exception as e:
         console.print(f"Bot not started: {e}")
 
@@ -163,56 +185,30 @@ async def cmd_start():
     console.print("\nWebMonitor Starting\n")
     console.print(f"{'Site':<35} {'Mode':<15} {'Schedule'}")
     console.print("-" * 80)
-
     for s in sites:
         console.print(
             f"{s['name']:<35} "
             f"{s.get('mode', 'single_page'):<15} "
             f"{get_next_window_info(s)}"
         )
-
-    activity_logger.info(f"WebMonitor started — {len(sites)} sites loaded")
     console.print("\nDashboard at http://localhost:5000\n")
 
     scheduler = AsyncIOScheduler()
 
     for site in sites:
-        schedule_type = site.get("schedule_type", "interval")
+        interval = _get_effective_interval(site)
+        scheduler.add_job(
+            check_site,
+            "interval",
+            minutes=interval,
+            args=[site],
+            id=site["name"],
+            next_run_time=datetime.now(),
+            max_instances=1,
+            coalesce=True
+        )
 
-        if schedule_type == "interval":
-            interval = site.get("interval_minutes", 60)
-            scheduler.add_job(
-                check_site,
-                "interval",
-                minutes=interval,
-                args=[site],
-                id=site["name"],
-                next_run_time=datetime.now(),
-                max_instances=1,
-                coalesce=True
-            )
-
-        elif schedule_type == "time_window":
-            windows = site.get("windows", [])
-            if windows:
-                min_interval = min(
-                    w.get("interval_minutes", 60)
-                    for w in windows
-                )
-            else:
-                min_interval = 60
-
-            scheduler.add_job(
-                check_site,
-                "interval",
-                minutes=min_interval,
-                args=[site],
-                id=site["name"],
-                next_run_time=datetime.now(),
-                max_instances=1,
-                coalesce=True
-            )
-
+    # Watchdog runs every hour
     scheduler.add_job(
         watchdog_check,
         "interval",
@@ -231,7 +227,6 @@ async def cmd_start():
         await asyncio.Event().wait()
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
-        activity_logger.info("WebMonitor stopped")
         console.print("\nStopped.")
 
 
@@ -240,12 +235,13 @@ async def cmd_check():
     sites = load_sites()
     console.print("[cyan]Running immediate check of all sites...[/cyan]\n")
     for site in sites:
-        await check_site(site)
+        await check_site(site, force=True)
     console.print("\n[green]Done.[/green]")
 
 
 def cmd_status():
     import sqlite3
+
     try:
         conn = sqlite3.connect("data/monitor.db")
     except Exception:
@@ -260,52 +256,66 @@ def cmd_status():
         border_style="cyan",
         header_style="bold"
     )
-    table.add_column("Site", style="cyan", min_width=25)
-    table.add_column("Last Check", justify="center")
-    table.add_column("Changes", justify="center")
-    table.add_column("Status", justify="center")
+    table.add_column("Site",        style="cyan", min_width=25)
+    table.add_column("Last Check",  justify="center")
+    table.add_column("Changes",     justify="center")
+    table.add_column("Status",      justify="center")
 
     for site in sites:
         name = site["name"]
 
-        last_check = conn.execute("""
+        last_check = conn.execute(
+            """
             SELECT timestamp FROM job_log
-            WHERE site_name = ? ORDER BY timestamp DESC LIMIT 1
-        """, (name,)).fetchone()
+            WHERE site_name = ?
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (name,)
+        ).fetchone()
 
         total = conn.execute(
-            "SELECT COUNT(*) FROM changes WHERE site_name = ?", (name,)
+            "SELECT COUNT(*) FROM changes WHERE site_name = ?",
+            (name,)
         ).fetchone()[0]
 
-        last_status = conn.execute("""
+        last_status = conn.execute(
+            """
             SELECT status FROM job_log
-            WHERE site_name = ? ORDER BY timestamp DESC LIMIT 1
-        """, (name,)).fetchone()
+            WHERE site_name = ?
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (name,)
+        ).fetchone()
 
-        status = "–"
-        if last_status:
-            status = "✓ OK" if last_status[0] == "success" else "✗ Error"
+        if last_status and last_status[0] == "success":
+            status_str = "[green]✓ OK[/green]"
+        elif last_status:
+            status_str = "[red]✗ Error[/red]"
+        else:
+            status_str = "[dim]Not run yet[/dim]"
 
         table.add_row(
             name,
-            last_check[0][:16] if last_check else "Never",
+            last_check[0] if last_check else "[dim]Never[/dim]",
             str(total),
-            status
+            status_str
         )
 
-    console.print(table)
     conn.close()
+    console.print(table)
 
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "start"
+    command = sys.argv[1] if len(sys.argv) > 1 else "start"
 
-    if cmd == "start":
+    if command == "start":
         asyncio.run(cmd_start())
-    elif cmd == "check":
+    elif command == "check":
         asyncio.run(cmd_check())
-    elif cmd == "status":
+    elif command == "status":
         cmd_status()
     else:
-        console.print(f"[red]Unknown command: {cmd}[/red]")
-        sys.exit(1)
+        console.print(f"[red]Unknown command:[/red] {command}")
+        console.print("Usage: python run.py [start|check|status]")
