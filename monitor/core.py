@@ -212,6 +212,117 @@ def compute_text_diff(old: str, new: str) -> tuple[str, float]:
     return diff_text, change_pct
 
 
+
+def fetch_json_api(url: str, site: dict) -> str:
+    """
+    Fetch a JSON API endpoint and extract only the watched fields.
+    Returns a formatted string of field: value pairs for comparison.
+    MUST be called via run_in_executor — never call directly in async context.
+    """
+    verify_ssl = site.get("ssl_verify", True)
+    try:
+        resp = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=20,
+            verify=verify_ssl
+        )
+        if resp.status_code != 200:
+            logger.warning(f"JSON API {url} returned {resp.status_code}")
+            return ""
+
+        data = resp.json()
+    except Exception as e:
+        logger.warning(f"JSON API fetch failed for {url}: {e}")
+        return ""
+
+    # Flatten nested JSON using dot notation (e.g. "data.news.id")
+    def flatten(obj, prefix=""):
+        items = {}
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                full_key = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, (dict, list)):
+                    items.update(flatten(v, full_key))
+                else:
+                    items[full_key] = v
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                full_key = f"{prefix}[{i}]"
+                if isinstance(v, (dict, list)):
+                    items.update(flatten(v, full_key))
+                else:
+                    items[full_key] = v
+        return items
+
+    flat = flatten(data)
+
+    # If specific fields are configured, extract only those
+    watched = site.get("json_fields", [])
+    if watched:
+        lines = []
+        for field in watched:
+            val = flat.get(field, "<field not found>")
+            lines.append(f"{field}: {val}")
+        return "\n".join(lines)
+
+    # No fields configured — return everything (useful for baseline)
+    lines = [f"{k}: {v}" for k, v in sorted(flat.items())]
+    return "\n".join(lines)
+
+
+async def check_json_api_url(url: str, site: dict) -> dict | None:
+    """
+    JSON API equivalent of check_single_url.
+    Compares watched field values against the previous snapshot.
+    """
+    loop = asyncio.get_running_loop()
+    content = await loop.run_in_executor(None, lambda: fetch_json_api(url, site))
+
+    if not content:
+        logger.warning(f"Empty JSON API response for {url}")
+        return {"error": True, "url": url, "message": "Empty JSON API response"}
+
+    checksum = hashlib.md5(content.encode()).hexdigest()
+    prev = get_last_snapshot(url)
+
+    # First visit — save baseline
+    if prev is None:
+        save_snapshot(site["name"], url, content, checksum)
+        logger.info(f"New JSON baseline: {url}")
+        return None
+
+    # No change
+    if prev["checksum"] == checksum:
+        logger.info(f"No change: {url}")
+        return None
+
+    # Fields changed — compute diff
+    diff_text, change_pct = compute_text_diff(prev["content"], content)
+
+    min_pct = site.get("min_change_percent", 1.0)
+    if change_pct < min_pct:
+        logger.info(
+            f"JSON change {change_pct:.1f}% below threshold "
+            f"{min_pct}% for {url}"
+        )
+        save_snapshot(site["name"], url, content, checksum)
+        return None
+
+    save_snapshot(site["name"], url, content, checksum)
+    save_change(site["name"], url, prev["checksum"], checksum,
+                change_pct, diff_text)
+
+    logger.info(f"JSON change detected: {url} ({change_pct:.1f}%)")
+
+    return {
+        "url":        url,
+        "diff":       diff_text,
+        "change_pct": change_pct,
+        "content":    content,
+    }
+
+
 async def check_single_url(url: str, site: dict) -> dict | None:
     """
     Fetches a URL and compares to previous snapshot.
@@ -307,8 +418,14 @@ async def check_site(site: dict, force: bool = False):
     errors   = []
     successes = []
 
+    # Route to the appropriate checker based on mode
+    mode = site.get("mode", "single_page")
+
     for url in urls:
-        result = await check_single_url(url, site)
+        if mode == "json_api":
+            result = await check_json_api_url(url, site)
+        else:
+            result = await check_single_url(url, site)
         if result is None:
             successes.append(url)
         elif result.get("error"):
