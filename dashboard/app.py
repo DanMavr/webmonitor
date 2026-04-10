@@ -626,6 +626,62 @@ def inspect_site(site_name):
 
     return render_template_string(INSPECT_TEMPLATE, summary=summary)
 
+@app.route("/api/json-fields")
+def api_json_fields():
+    """
+    Probe a JSON API URL and return its fields with current values.
+    Used by the Add/Edit form to auto-detect monitorable fields.
+    Flattens nested JSON using dot notation.
+    """
+    import requests as _requests
+
+    url = request.args.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "No URL provided"})
+
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
+            ),
+            "Accept": "application/json",
+        }
+        resp = _requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return jsonify({"error": f"URL returned HTTP {resp.status_code}"})
+
+        data = resp.json()
+    except ValueError:
+        return jsonify({"error": "URL did not return valid JSON"})
+    except Exception as e:
+        return jsonify({"error": f"Request failed: {e}"})
+
+    # Flatten nested structures
+    def flatten(obj, prefix=""):
+        items = {}
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                full_key = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, (dict, list)):
+                    items.update(flatten(v, full_key))
+                else:
+                    items[full_key] = v
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj[:5]):   # cap list expansion at 5 items
+                full_key = f"{prefix}[{i}]"
+                if isinstance(v, (dict, list)):
+                    items.update(flatten(v, full_key))
+                else:
+                    items[full_key] = v
+        return items
+
+    flat = flatten(data)
+    fields = [{"key": k, "value": str(v)} for k, v in sorted(flat.items())]
+
+    return jsonify({"fields": fields})
+
+
 @app.route("/logs")
 def view_logs():
     import os
@@ -892,6 +948,13 @@ def form_to_site(form) -> tuple[dict | None, str]:
     if target_sel:
         site["target_selector"] = target_sel
 
+    # JSON fields
+    json_fields_raw = form.get("json_fields_raw", "").strip()
+    if json_fields_raw:
+        fields = [f.strip() for f in json_fields_raw.split(",") if f.strip()]
+        if fields:
+            site["json_fields"] = fields
+
     # SSL
     if form.get("ssl_verify") == "false":
         site["ssl_verify"] = False
@@ -1070,11 +1133,14 @@ SITE_FORM_TEMPLATE = """
       <div class="field">
         <label>Monitoring mode</label>
         <select name="mode" id="mode-select" onchange="onModeChange(this.value)">
-          <option value="single_page" {% if site.mode != 'whole_site' %}selected{% endif %}>
+          <option value="single_page" {% if site.mode not in ('whole_site','json_api') %}selected{% endif %}>
             single_page — monitor one specific page only
           </option>
           <option value="whole_site" {% if site.mode == 'whole_site' %}selected{% endif %}>
             whole_site — crawl and monitor multiple pages
+          </option>
+          <option value="json_api" {% if site.mode == 'json_api' %}selected{% endif %}>
+            json_api — watch specific fields from a JSON API
           </option>
         </select>
       </div>
@@ -1165,7 +1231,117 @@ SITE_FORM_TEMPLATE = """
                    value="{{ site.min_change_percent or 3 }}">
             <div class="hint">Changes smaller than this percentage are ignored.</div>
           </div>
-          <div class="field">
+
+          <!-- ── JSON API Fields ─────────────────────────────────────── -->
+          <div id="json-api-section" style="display:none">
+            <div class="field">
+              <label>JSON Fields to monitor</label>
+              <div class="hint" style="margin-bottom:8px">
+                Paste the API URL above and click <strong>Detect Fields</strong>
+                to see all available fields. Tick the ones you want to monitor —
+                an alert fires when any ticked field changes value.
+              </div>
+              <button type="button" id="detect-fields-btn"
+                      onclick="detectJsonFields()"
+                      style="margin-bottom:12px;padding:6px 16px;background:#38bdf8;color:#000;border:none;border-radius:4px;cursor:pointer;font-weight:600">
+                🔍 Detect Fields
+              </button>
+              <div id="json-fields-loading" style="display:none;color:#94a3b8;font-size:13px">
+                Fetching fields…
+              </div>
+              <div id="json-fields-error" style="display:none;color:#f87171;font-size:13px"></div>
+              <div id="json-fields-list" style="margin-top:8px"></div>
+              <!-- Hidden textarea stores the final comma-separated field list -->
+              <textarea name="json_fields_raw" id="json-fields-raw"
+                        style="display:none">{{ site.json_fields|join(',') if site.json_fields else '' }}</textarea>
+            </div>
+          </div>
+
+          <script>
+          // Show/hide JSON API section based on mode
+          function onModeChange(val) {
+            const js  = document.getElementById('js-section');
+            const adv = document.getElementById('advanced-section');
+            const japi = document.getElementById('json-api-section');
+            const tgt = document.getElementById('target-selector-field');
+            if (japi) japi.style.display = (val === 'json_api') ? 'block' : 'none';
+            if (tgt) tgt.style.display   = (val === 'json_api') ? 'none'  : 'block';
+          }
+          // Run on page load to set correct initial state
+          document.addEventListener('DOMContentLoaded', function() {
+            const sel = document.getElementById('mode-select');
+            if (sel) onModeChange(sel.value);
+            // Pre-render saved fields as checkboxes
+            const raw = document.getElementById('json-fields-raw');
+            if (raw && raw.value) {
+              const saved = raw.value.split(',').map(s => s.trim()).filter(Boolean);
+              renderFieldCheckboxes(saved.map(f => ({key: f, value: '…', checked: true})), []);
+            }
+          });
+
+          function detectJsonFields() {
+            const urlInput = document.querySelector('input[name="url"]');
+            if (!urlInput || !urlInput.value.trim()) {
+              alert('Please enter a URL first.');
+              return;
+            }
+            document.getElementById('json-fields-loading').style.display = 'block';
+            document.getElementById('json-fields-error').style.display   = 'none';
+            document.getElementById('json-fields-list').innerHTML         = '';
+
+            fetch('/api/json-fields?url=' + encodeURIComponent(urlInput.value.trim()))
+              .then(r => r.json())
+              .then(data => {
+                document.getElementById('json-fields-loading').style.display = 'none';
+                if (data.error) {
+                  document.getElementById('json-fields-error').textContent = data.error;
+                  document.getElementById('json-fields-error').style.display = 'block';
+                  return;
+                }
+                // Get currently saved fields so we pre-check them
+                const raw = document.getElementById('json-fields-raw');
+                const saved = raw && raw.value
+                  ? raw.value.split(',').map(s => s.trim()).filter(Boolean)
+                  : [];
+                renderFieldCheckboxes(data.fields, saved);
+              })
+              .catch(e => {
+                document.getElementById('json-fields-loading').style.display = 'none';
+                document.getElementById('json-fields-error').textContent = 'Request failed: ' + e;
+                document.getElementById('json-fields-error').style.display = 'block';
+              });
+          }
+
+          function renderFieldCheckboxes(fields, saved) {
+            const container = document.getElementById('json-fields-list');
+            container.innerHTML = '';
+            fields.forEach(f => {
+              const isChecked = saved.length === 0
+                ? false
+                : saved.includes(f.key);
+              const row = document.createElement('div');
+              row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid #1e293b';
+              row.innerHTML = \`
+                <input type="checkbox" id="jf_\${f.key}" value="\${f.key}"
+                       \${isChecked ? 'checked' : ''}
+                       onchange="updateJsonFieldsRaw()"
+                       style="width:16px;height:16px;cursor:pointer">
+                <label for="jf_\${f.key}" style="flex:0 0 220px;font-family:monospace;font-size:13px;color:#38bdf8;cursor:pointer">\${f.key}</label>
+                <span style="font-size:13px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">\${f.value}</span>
+              \`;
+              container.appendChild(row);
+            });
+            updateJsonFieldsRaw();
+          }
+
+          function updateJsonFieldsRaw() {
+            const checkboxes = document.querySelectorAll('#json-fields-list input[type=checkbox]:checked');
+            const fields = Array.from(checkboxes).map(c => c.value);
+            document.getElementById('json-fields-raw').value = fields.join(',');
+          }
+          </script>
+
+          <div id="target-selector-field" class="field">
             <label>Target selector <span style="color:#38bdf8;font-size:11px;font-weight:400;margin-left:6px">Focus monitoring on one section only</span></label>
             <input type="text" name="target_selector"
                    value="{{ site.target_selector or '' }}"
