@@ -1266,6 +1266,16 @@ SITE_FORM_TEMPLATE = """
             const tgt = document.getElementById('target-selector-field');
             if (japi) japi.style.display = (val === 'json_api') ? 'block' : 'none';
             if (tgt) tgt.style.display   = (val === 'json_api') ? 'none'  : 'block';
+            // Auto-open Sensitivity & Filters when json_api is selected
+            // so the Detect Fields button is immediately visible
+            if (val === 'json_api') {
+              const sensBody = document.getElementById('sensitivity-body');
+              const sensArr  = document.getElementById('sensitivity-arrow');
+              if (sensBody && !sensBody.classList.contains('open')) {
+                sensBody.classList.add('open');
+                if (sensArr) sensArr.textContent = '▾';
+              }
+            }
           }
           // Run on page load to set correct initial state
           document.addEventListener('DOMContentLoaded', function() {
