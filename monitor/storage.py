@@ -1,102 +1,131 @@
 import sqlite3
-from pathlib import Path
+import logging
+from datetime import datetime, timezone
 
-DB_PATH = "data/monitor.db"
+logger = logging.getLogger(__name__)
+DB = "data/monitor.db"
+
+# How many historical snapshots to keep per URL (older ones are pruned)
+SNAPSHOT_KEEP = 5
 
 
 def init_db():
-    Path("data/snapshots").mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
+    with sqlite3.connect(DB) as conn:
+        c = conn.cursor()
 
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS snapshots (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            site_name     TEXT NOT NULL,
-            url           TEXT NOT NULL,
-            content       TEXT,
-            screenshot    TEXT,
-            checksum      TEXT NOT NULL,
-            timestamp     DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS snapshots (
+                site_name TEXT,
+                url       TEXT,
+                content   TEXT,
+                checksum  TEXT,
+                timestamp TEXT
+            )
+        """)
 
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS changes (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            site_name       TEXT NOT NULL,
-            url             TEXT NOT NULL,
-            old_checksum    TEXT,
-            new_checksum    TEXT,
-            change_pct      TEXT,
-            diff_text       TEXT,
-            diff_screenshot TEXT,
-            timestamp       DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS changes (
+                site_name   TEXT,
+                url         TEXT,
+                old_checksum TEXT,
+                new_checksum TEXT,
+                change_pct  TEXT,
+                diff_text   TEXT,
+                timestamp   TEXT
+            )
+        """)
 
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS job_log (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            site_name   TEXT NOT NULL,
-            status      TEXT,
-            message     TEXT,
-            timestamp   DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS job_log (
+                site_name TEXT,
+                status    TEXT,
+                message   TEXT,
+                timestamp TEXT
+            )
+        """)
 
-    conn.commit()
-    conn.close()
+        # Indexes — critical for performance as tables grow
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_snapshots_url
+            ON snapshots(url, timestamp)
+        """)
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_snapshots_site
+            ON snapshots(site_name, timestamp)
+        """)
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_changes_site
+            ON changes(site_name, timestamp)
+        """)
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_job_log_site
+            ON job_log(site_name, timestamp)
+        """)
+
+        conn.commit()
 
 
-def get_last_snapshot(site_name: str, url: str) -> dict | None:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("""
-        SELECT * FROM snapshots
-        WHERE site_name = ? AND url = ?
-        ORDER BY timestamp DESC LIMIT 1
-    """, (site_name, url))
-    row = c.fetchone()
-    conn.close()
+def get_last_snapshot(url: str) -> dict | None:
+    with sqlite3.connect(DB) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT * FROM snapshots
+            WHERE url = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (url,)
+        ).fetchone()
     return dict(row) if row else None
 
 
-def save_snapshot(site_name: str, url: str, content: str,
-                  checksum: str, screenshot: str = None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO snapshots (site_name, url, content, screenshot, checksum)
-        VALUES (?, ?, ?, ?, ?)
-    """, (site_name, url, content, screenshot, checksum))
-    conn.commit()
-    conn.close()
+def save_snapshot(site_name: str, url: str, content: str, checksum: str):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    with sqlite3.connect(DB) as conn:
+        # Insert new snapshot
+        conn.execute(
+            "INSERT INTO snapshots VALUES (?, ?, ?, ?, ?)",
+            (site_name, url, content, checksum, ts)
+        )
+
+        # Prune old snapshots — keep only the most recent SNAPSHOT_KEEP rows
+        conn.execute(
+            """
+            DELETE FROM snapshots
+            WHERE url = ?
+              AND timestamp NOT IN (
+                SELECT timestamp FROM snapshots
+                WHERE url = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+              )
+            """,
+            (url, url, SNAPSHOT_KEEP)
+        )
+
+        conn.commit()
 
 
-def save_change(site_name: str, url: str, old_checksum: str,
-                new_checksum: str, change_pct: str,
-                diff_text: str = "", diff_screenshot: str = None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO changes
-        (site_name, url, old_checksum, new_checksum, change_pct,
-         diff_text, diff_screenshot)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (site_name, url, old_checksum, new_checksum, change_pct,
-          diff_text, diff_screenshot))
-    conn.commit()
-    conn.close()
+def save_change(site_name: str, url: str, old_cs: str, new_cs: str,
+                change_pct: float, diff_text: str):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    with sqlite3.connect(DB) as conn:
+        conn.execute(
+            "INSERT INTO changes VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (site_name, url, old_cs, new_cs, str(change_pct), diff_text, ts)
+        )
+        conn.commit()
 
 
-def log_job(site_name: str, status: str, message: str = ""):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO job_log (site_name, status, message) VALUES (?, ?, ?)",
-        (site_name, status, message)
-    )
-    conn.commit()
-    conn.close()
+def log_job(site_name: str, status: str, message: str):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    with sqlite3.connect(DB) as conn:
+        conn.execute(
+            "INSERT INTO job_log VALUES (?, ?, ?, ?)",
+            (site_name, status, message, ts)
+        )
+        conn.commit()
