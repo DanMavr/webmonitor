@@ -6,6 +6,8 @@ sites:
     mode: whole_site
     schedule_type: interval
     interval_minutes: 720
+    javascript: true
+    js_wait_seconds: 6
     notify:
       - telegram
     crawl:
@@ -32,10 +34,14 @@ sites:
         - ".docx"
         - ".xls"
         - ".xlsx"
-    min_content_words: 80
+    min_content_words: 20
     min_change_percent: 3
 
   # ── LSE RNS ─────────────────────────────────────────────────────────────────
+  # URL confirmed correct by user — /analysis page contains the news table
+  # 75% of MATD RNS releases historically drop at 07:00-07:05 UK time
+  # Window 1: tight 1-minute burst around open to catch the 07:00 drop fast
+  # Window 2: full market hours at 5-min intervals for mid-day/close releases
   - name: "LSE - RNS"
     url: "https://www.londonstockexchange.com/stock/MATD/petro-matad-limited/analysis"
     mode: single_page
@@ -47,8 +53,12 @@ sites:
       - telegram
     windows:
       - days: mon-fri
-        from: "06:59"
+        from: "06:55"
         to: "07:10"
+        interval_minutes: 1
+      - days: mon-fri
+        from: "07:10"
+        to: "17:00"
         interval_minutes: 5
     min_change_percent: 1
     ignore_selectors:
