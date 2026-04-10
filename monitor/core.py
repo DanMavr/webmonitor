@@ -63,11 +63,11 @@ def extract_content(html: str, site: dict) -> str:
     return "\n".join(lines)
 
 
-def fetch_page_js(url: str, site: dict) -> tuple[str, str]:
+async def fetch_page_js(url: str, site: dict) -> tuple[str, str]:
     """
     Fetches a JS-rendered page using Selenium + system Chromium.
-    Called automatically when requests returns thin content,
-    or when javascript: true is set explicitly in config.
+    Uses asyncio.sleep instead of time.sleep to avoid blocking
+    the event loop while waiting for JS to render.
     """
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
@@ -81,16 +81,21 @@ def fetch_page_js(url: str, site: dict) -> tuple[str, str]:
     options.binary_location = CHROMIUM_BINARY
 
     service = Service(CHROMEDRIVER_BIN)
-    driver = webdriver.Chrome(service=service, options=options)
 
-    try:
-        driver.get(url)
-        wait = site.get("js_wait_seconds", 5)
-        time.sleep(wait)
-        html = driver.page_source
-    finally:
-        driver.quit()
+    # Run the blocking Selenium calls in a thread pool
+    # so the asyncio event loop is never blocked
+    loop = asyncio.get_event_loop()
 
+    def run_selenium():
+        driver = webdriver.Chrome(service=service, options=options)
+        try:
+            driver.get(url)
+            time.sleep(site.get("js_wait_seconds", 5))
+            return driver.page_source
+        finally:
+            driver.quit()
+
+    html = await loop.run_in_executor(None, run_selenium)
     content = extract_content(html, site)
     checksum = hashlib.md5(content.encode()).hexdigest()
     return content, checksum
