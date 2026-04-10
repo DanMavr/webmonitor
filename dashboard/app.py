@@ -117,9 +117,12 @@ TEMPLATE = """
       <h1>Web<span>Monitor</span></h1>
       <div class="tz-note">All times shown in Prague time (CEST)</div>
     </div>
-    <button class="btn-check" id="checkBtn" onclick="runCheckNow()">
-      Check All Now
-    </button>
+    <div style="display:flex;gap:10px;align-items:center">
+      <a href="/logs" style="color:#94a3b8;font-size:13px;text-decoration:none;padding:10px 16px;border:1px solid #334155;border-radius:8px">View Logs</a>
+      <button class="btn-check" id="checkBtn" onclick="runCheckNow()">
+        Check All Now
+      </button>
+    </div>
   </div>
 
   <!-- Stats Row -->
@@ -594,6 +597,220 @@ def inspect_site(site_name):
 
     return render_template_string(INSPECT_TEMPLATE, summary=summary)
 
+@app.route("/logs")
+def view_logs():
+    import os
+    from zoneinfo import ZoneInfo
+    from datetime import datetime
+
+    log_path = "data/activity.log"
+    lines = []
+
+    if os.path.exists(log_path):
+        with open(log_path, "r") as f:
+            all_lines = f.readlines()
+        lines = all_lines[-1000:]
+
+    parsed = []
+    for raw in reversed(lines):
+        raw = raw.strip()
+        if not raw:
+            continue
+
+        level = "INFO"
+        if "[ERROR]" in raw:
+            level = "ERROR"
+        elif "[WARNING]" in raw:
+            level = "WARNING"
+        elif "WATCHDOG" in raw:
+            level = "WATCHDOG"
+        elif "Change detected" in raw:
+            level = "CHANGE"
+        elif "Checking:" in raw:
+            level = "CHECKING"
+        elif "Baseline" in raw:
+            level = "BASELINE"
+        elif "JS fallback" in raw:
+            level = "JS"
+
+        try:
+            ts_str = raw[:19]
+            dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+            dt_utc = dt.replace(tzinfo=ZoneInfo("UTC"))
+            dt_local = dt_utc.astimezone(ZoneInfo("Europe/Prague"))
+            ts_display = dt_local.strftime("%Y-%m-%d %H:%M:%S")
+            message = raw[20:].strip()
+        except Exception:
+            ts_display = ""
+            message = raw
+
+        parsed.append({
+            "ts": ts_display,
+            "level": level,
+            "message": message,
+        })
+
+    LOG_TEMPLATE = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>WebMonitor — Logs</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0 }
+        body { background: #0f172a; color: #e2e8f0;
+               font-family: system-ui, sans-serif; padding: 24px }
+        .header-row { display: flex; align-items: center;
+                      justify-content: space-between; margin-bottom: 20px }
+        h1 { font-size: 22px; font-weight: 700; color: #f8fafc }
+        h1 span { color: #38bdf8 }
+        .tz-note { font-size: 11px; color: #475569; margin-top: 4px }
+        .back { color: #38bdf8; font-size: 13px; text-decoration: none }
+        .back:hover { color: #7dd3fc }
+        .controls { display: flex; gap: 8px; flex-wrap: wrap;
+                    margin-bottom: 16px; align-items: center }
+        .filter-btn {
+          border: 1px solid #334155; background: none;
+          color: #94a3b8; padding: 5px 14px; border-radius: 6px;
+          font-size: 12px; cursor: pointer;
+        }
+        .filter-btn:hover, .filter-btn.active {
+          border-color: #38bdf8; color: #38bdf8;
+        }
+        .filter-btn.active { background: #0c2a3e }
+        .search-box {
+          background: #1e293b; border: 1px solid #334155;
+          color: #e2e8f0; padding: 5px 12px; border-radius: 6px;
+          font-size: 12px; width: 220px;
+        }
+        .search-box::placeholder { color: #475569 }
+        .auto-refresh {
+          margin-left: auto; font-size: 12px; color: #475569;
+          display: flex; align-items: center; gap: 6px
+        }
+        .log-wrap {
+          background: #0a0f1e; border: 1px solid #1e293b;
+          border-radius: 10px; overflow: hidden;
+        }
+        .log-line {
+          display: flex; gap: 12px; padding: 5px 14px;
+          border-bottom: 1px solid #0f172a;
+          font-family: monospace; font-size: 12px; line-height: 1.5;
+        }
+        .log-line:hover { background: #111827 }
+        .ts { color: #475569; white-space: nowrap; min-width: 140px }
+        .badge {
+          font-size: 10px; font-weight: 700; padding: 1px 7px;
+          border-radius: 4px; white-space: nowrap;
+          align-self: center; min-width: 72px; text-align: center;
+        }
+        .msg { color: #cbd5e1; word-break: break-word }
+        .badge-INFO     { background:#1e3a5f; color:#60a5fa }
+        .badge-CHECKING { background:#1e3a5f; color:#38bdf8 }
+        .badge-BASELINE { background:#052e16; color:#22c55e }
+        .badge-CHANGE   { background:#3b1f00; color:#f59e0b }
+        .badge-JS       { background:#2d1f00; color:#fbbf24 }
+        .badge-WARNING  { background:#2d1f00; color:#fb923c }
+        .badge-ERROR    { background:#450a0a; color:#f87171 }
+        .badge-WATCHDOG { background:#450a0a; color:#f87171 }
+        .msg-CHANGE     { color: #f59e0b }
+        .msg-ERROR      { color: #f87171 }
+        .msg-WATCHDOG   { color: #f87171 }
+        .msg-BASELINE   { color: #22c55e }
+        .empty  { text-align: center; padding: 60px; color: #475569 }
+        .count  { font-size: 12px; color: #475569; margin-bottom: 10px }
+        .hidden { display: none !important }
+      </style>
+    </head>
+    <body>
+      <div class="header-row">
+        <div>
+          <h1>Web<span>Monitor</span> — Logs</h1>
+          <div class="tz-note">Times shown in Prague time (CEST) &nbsp;·&nbsp;
+            Last {{ lines|length }} entries
+          </div>
+        </div>
+        <a href="/" class="back">← Back to dashboard</a>
+      </div>
+
+      <div class="controls">
+        <button class="filter-btn active" onclick="setFilter('ALL', this)">All</button>
+        <button class="filter-btn" onclick="setFilter('CHANGE', this)">Changes</button>
+        <button class="filter-btn" onclick="setFilter('ERROR', this)">Errors</button>
+        <button class="filter-btn" onclick="setFilter('WATCHDOG', this)">Watchdog</button>
+        <button class="filter-btn" onclick="setFilter('WARNING', this)">Warnings</button>
+        <input class="search-box" type="text" id="searchBox"
+               placeholder="Search logs..." oninput="applyFilters()">
+        <div class="auto-refresh">
+          <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()">
+          <label for="autoRefresh" style="cursor:pointer">Auto-refresh 30s</label>
+        </div>
+      </div>
+
+      <div class="count" id="lineCount">Showing {{ lines|length }} lines</div>
+
+      {% if lines %}
+      <div class="log-wrap" id="logWrap">
+        {% for entry in lines %}
+        <div class="log-line" data-level="{{ entry.level }}">
+          <span class="ts">{{ entry.ts }}</span>
+          <span class="badge badge-{{ entry.level }}">{{ entry.level }}</span>
+          <span class="msg msg-{{ entry.level }}">{{ entry.message }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">
+        <p>No activity log yet.</p>
+        <p style="font-size:13px;margin-top:8px">Logs will appear here after the monitor runs.</p>
+      </div>
+      {% endif %}
+
+      <script>
+        let currentFilter = 'ALL';
+        let refreshTimer = null;
+
+        function setFilter(level, btn) {
+          currentFilter = level;
+          document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          applyFilters();
+        }
+
+        function applyFilters() {
+          const search = document.getElementById('searchBox').value.toLowerCase();
+          const rows = document.querySelectorAll('.log-line');
+          let visible = 0;
+          rows.forEach(row => {
+            const level = row.dataset.level;
+            const text  = row.textContent.toLowerCase();
+            const levelOk  = currentFilter === 'ALL' || level === currentFilter;
+            const searchOk = !search || text.includes(search);
+            if (levelOk && searchOk) {
+              row.classList.remove('hidden');
+              visible++;
+            } else {
+              row.classList.add('hidden');
+            }
+          });
+          document.getElementById('lineCount').textContent = `Showing ${visible} lines`;
+        }
+
+        function toggleAutoRefresh() {
+          const checked = document.getElementById('autoRefresh').checked;
+          if (checked) {
+            refreshTimer = setInterval(() => location.reload(), 30000);
+          } else {
+            clearInterval(refreshTimer);
+            refreshTimer = null;
+          }
+        }
+      </script>
+    </body>
+    </html>
+    """
+
+    return render_template_string(LOG_TEMPLATE, lines=parsed)
 
 def start_dashboard():
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
