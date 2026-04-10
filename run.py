@@ -12,7 +12,7 @@ import logging
 import threading
 import warnings
 import urllib3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
 
@@ -94,18 +94,58 @@ def _get_effective_interval(site: dict) -> int:
     return site.get("interval_minutes", 60)
 
 
+def _get_watchdog_threshold(site: dict) -> int:
+    """
+    Return the silence threshold in minutes before watchdog fires for a site.
+
+    Rules:
+      time_window sites:       30 minutes — only evaluated during active window
+      interval <= 360 min:     1440 min (24 hours)
+      interval > 360 min:      2880 min (48 hours)
+
+    These are intentionally generous — the watchdog should fire when something
+    is genuinely broken, not on every scheduled gap.
+    """
+    stype    = site.get("schedule_type", "interval")
+    interval = site.get("interval_minutes", 60)
+
+    if stype == "time_window":
+        return 30
+
+    if interval <= 360:
+        return 24 * 60   # 24 hours
+
+    return 48 * 60       # 48 hours
+
+
+# ── Watchdog cooldown state (in-memory) ──────────────────────────────────────
+# Tracks when each site last sent a watchdog alert.
+# Prevents repeated Telegram spam if a site stays broken for hours.
+# Key: site name, Value: datetime of last alert (UTC)
+_watchdog_last_alerted: dict[str, datetime] = {}
+
+WATCHDOG_COOLDOWN_HOURS = 4   # minimum gap between repeat alerts per site
+
+
 # ── Watchdog ──────────────────────────────────────────────────────────────────
 
 async def watchdog_check(sites: list):
     """
-    Runs every hour. Alerts via Telegram if any site has not been checked
-    within 3× its expected interval.
+    Runs every 30 minutes.
+
+    For each site:
+    - Skips time_window sites that are currently outside their active window
+    - Checks when the site last successfully logged a job_log entry
+    - If silent longer than _get_watchdog_threshold(), sends a Telegram alert
+    - Respects a 4-hour cooldown per site to prevent repeated alerts
+    - Also alerts if a site has NEVER run since the last restart
     """
     import sqlite3
     from monitor.scheduler import is_in_window
 
     token   = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    now_utc = datetime.now(timezone.utc)
 
     with sqlite3.connect("data/monitor.db") as conn:
         conn.row_factory = sqlite3.Row
@@ -114,15 +154,24 @@ async def watchdog_check(sites: list):
             name          = site["name"]
             schedule_type = site.get("schedule_type", "interval")
 
-            # Don't alert for time-window sites that are outside their window
+            # ── Window check ──────────────────────────────────────────────────
+            # Skip time_window sites outside their active window.
+            # No point alerting that LSE hasn't checked at 3am on a Sunday.
             if schedule_type == "time_window":
                 in_window, _ = is_in_window(site)
                 if not in_window:
                     continue
 
-            expected_interval = _get_effective_interval(site)
-            max_silence       = expected_interval * 3
+            # ── Cooldown check ────────────────────────────────────────────────
+            # If we already alerted for this site recently, skip until cooldown
+            # expires. Prevents alert floods if a site stays broken.
+            last_alerted = _watchdog_last_alerted.get(name)
+            if last_alerted:
+                elapsed_since_alert = (now_utc - last_alerted).total_seconds() / 3600
+                if elapsed_since_alert < WATCHDOG_COOLDOWN_HOURS:
+                    continue
 
+            # ── Get last job_log entry ────────────────────────────────────────
             row = conn.execute(
                 """
                 SELECT timestamp FROM job_log
@@ -133,36 +182,81 @@ async def watchdog_check(sites: list):
                 (name,)
             ).fetchone()
 
-            if row is None:
-                continue   # site hasn't run yet — not a watchdog concern
+            threshold_minutes = _get_watchdog_threshold(site)
 
-            # Parse stored UTC timestamp and keep it timezone-aware
+            if row is None:
+                # Site has never run — alert immediately
+                expected_interval = _get_effective_interval(site)
+                msg = (
+                    f"⚠️ WATCHDOG ALERT\n\n"
+                    f"Site: {name}\n"
+                    f"Status: Never checked since last restart\n"
+                    f"Expected every: {expected_interval} minutes\n\n"
+                    f"This site has no job log entry. "
+                    f"Check the service and config."
+                )
+                logger.warning(f"Watchdog: {name} has never run")
+                console.log(f"[red]WATCHDOG: {name} has never run[/red]")
+                await _send_watchdog_alert(token, chat_id, name, msg)
+                continue
+
+            # ── Silence duration check ────────────────────────────────────────
             last_time = datetime.strptime(
                 row["timestamp"][:19], "%Y-%m-%d %H:%M:%S"
             ).replace(tzinfo=timezone.utc)
 
-            silence_minutes = (
-                datetime.now(timezone.utc) - last_time
-            ).total_seconds() / 60
+            silence_minutes = (now_utc - last_time).total_seconds() / 60
 
-            if silence_minutes > max_silence:
+            if silence_minutes > threshold_minutes:
+                silence_str   = _fmt_duration(silence_minutes)
+                threshold_str = _fmt_duration(threshold_minutes)
+
                 msg = (
-                    f"WATCHDOG ALERT\n\n"
+                    f"⚠️ WATCHDOG ALERT\n\n"
                     f"Site: {name}\n"
-                    f"Silent for: {int(silence_minutes)} minutes\n"
-                    f"Expected every: {expected_interval} minutes\n\n"
+                    f"Silent for: {silence_str}\n"
+                    f"Threshold: {threshold_str}\n\n"
                     f"The monitor may have stopped working for this site."
                 )
-                console.log(f"[red]WATCHDOG: {name} silent {int(silence_minutes)}min[/red]")
-                logger.warning(f"Watchdog: {name} silent {int(silence_minutes)}min")
+                logger.warning(
+                    f"Watchdog: {name} silent {silence_str} "
+                    f"(threshold {threshold_str})"
+                )
+                console.log(
+                    f"[red]WATCHDOG: {name} silent {silence_str}[/red]"
+                )
+                await _send_watchdog_alert(token, chat_id, name, msg)
 
-                if token and chat_id:
-                    import telegram
-                    bot = telegram.Bot(token=token)
-                    try:
-                        await bot.send_message(chat_id=chat_id, text=msg)
-                    except Exception as e:
-                        logger.error(f"Watchdog Telegram alert failed: {e}")
+
+def _fmt_duration(minutes: float) -> str:
+    """Format a duration in minutes as a human-readable string."""
+    minutes = int(minutes)
+    if minutes < 60:
+        return f"{minutes} minutes"
+    hours = minutes // 60
+    mins  = minutes % 60
+    if mins == 0:
+        return f"{hours}h"
+    return f"{hours}h {mins}min"
+
+
+async def _send_watchdog_alert(token: str, chat_id: str, site_name: str, msg: str):
+    """
+    Send a watchdog Telegram alert and record the time in the cooldown dict.
+    Does nothing silently if credentials are not set.
+    """
+    if not token or not chat_id:
+        logger.warning("Watchdog: Telegram credentials not set, cannot send alert")
+        return
+
+    import telegram
+    bot = telegram.Bot(token=token)
+    try:
+        await bot.send_message(chat_id=chat_id, text=msg)
+        # Record alert time for cooldown
+        _watchdog_last_alerted[site_name] = datetime.now(timezone.utc)
+    except Exception as e:
+        logger.error(f"Watchdog Telegram alert failed for {site_name}: {e}")
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -212,14 +306,14 @@ async def cmd_start():
             coalesce=True
         )
 
-    # Watchdog runs every hour
+    # Watchdog runs every 30 minutes, first run after 30 min (not at startup)
     scheduler.add_job(
         watchdog_check,
         "interval",
-        hours=1,
+        minutes=30,
         args=[sites],
         id="watchdog",
-        next_run_time=datetime.now(),
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=30),
         max_instances=1,
         coalesce=True
     )
