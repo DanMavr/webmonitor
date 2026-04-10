@@ -1258,30 +1258,9 @@ SITE_FORM_TEMPLATE = """
           </div>
 
           <script>
-          // Show/hide JSON API section based on mode
-          function onModeChange(val) {
-            const js  = document.getElementById('js-section');
-            const adv = document.getElementById('advanced-section');
-            const japi = document.getElementById('json-api-section');
-            const tgt = document.getElementById('target-selector-field');
-            if (japi) japi.style.display = (val === 'json_api') ? 'block' : 'none';
-            if (tgt) tgt.style.display   = (val === 'json_api') ? 'none'  : 'block';
-            // Auto-open Sensitivity & Filters when json_api is selected
-            // so the Detect Fields button is immediately visible
-            if (val === 'json_api') {
-              const sensBody = document.getElementById('sensitivity-body');
-              const sensArr  = document.getElementById('sensitivity-arrow');
-              if (sensBody && !sensBody.classList.contains('open')) {
-                sensBody.classList.add('open');
-                if (sensArr) sensArr.textContent = '▾';
-              }
-            }
-          }
-          // Run on page load to set correct initial state
+          // onModeChange is defined globally at bottom of page (merged)
+          // Pre-render saved JSON fields as checkboxes on page load
           document.addEventListener('DOMContentLoaded', function() {
-            const sel = document.getElementById('mode-select');
-            if (sel) onModeChange(sel.value);
-            // Pre-render saved fields as checkboxes
             const raw = document.getElementById('json-fields-raw');
             if (raw && raw.value) {
               const saved = raw.value.split(',').map(s => s.trim()).filter(Boolean);
@@ -1457,8 +1436,27 @@ SITE_FORM_TEMPLATE = """
 
   <script>
     function onModeChange(v) {
-      document.getElementById('crawl-section').style.display =
-        v === 'whole_site' ? 'block' : 'none';
+      // whole_site crawl options
+      var crawl = document.getElementById('crawl-section');
+      if (crawl) crawl.style.display = (v === 'whole_site') ? 'block' : 'none';
+
+      // json_api fields section
+      var japi = document.getElementById('json-api-section');
+      if (japi) japi.style.display = (v === 'json_api') ? 'block' : 'none';
+
+      // target selector (hide for json_api — not applicable)
+      var tgt = document.getElementById('target-selector-field');
+      if (tgt) tgt.style.display = (v === 'json_api') ? 'none' : 'block';
+
+      // auto-open Sensitivity & Filters when json_api selected
+      if (v === 'json_api') {
+        var sensBody = document.getElementById('sensitivity-body');
+        var sensArr  = document.getElementById('sensitivity-arrow');
+        if (sensBody && !sensBody.classList.contains('open')) {
+          sensBody.classList.add('open');
+          if (sensArr) sensArr.textContent = '\u25be';
+        }
+      }
     }
     function onSchedChange(v) {
       document.getElementById('interval-section').style.display =
@@ -1470,7 +1468,7 @@ SITE_FORM_TEMPLATE = """
       var body  = document.getElementById(bodyId);
       var arrow = document.getElementById(arrowId);
       var open  = body.classList.toggle('open');
-      arrow.textContent = open ? '▾' : '▸';
+      arrow.textContent = open ? '\u25be' : '\u25b8';
     }
     // Init on load
     onModeChange(document.getElementById('mode-select').value);
