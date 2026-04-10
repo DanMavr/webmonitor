@@ -1279,6 +1279,42 @@ SITE_FORM_TEMPLATE = """
 
 # ── Site management routes ────────────────────────────────────────────────────
 
+def _trigger_immediate_check(site: dict):
+    """
+    Fire an immediate one-shot check for a site using the running scheduler.
+    Falls back to a background thread if the scheduler is not available
+    (e.g. during testing or when dashboard is run standalone).
+    Called after add/edit so the site gets a baseline or refreshed snapshot
+    without waiting for its next scheduled interval.
+    """
+    # Path 1 — running inside the normal run.py process: use APScheduler
+    try:
+        import run as _run_module
+        sched = getattr(_run_module, "_scheduler", None)
+        if sched is not None and sched.running:
+            from monitor.core import check_site as _cs
+            sched.add_job(
+                _cs,
+                "date",
+                args=[site],
+                id=f"__immediate_{site['name']}",
+                misfire_grace_time=120,
+                replace_existing=True,
+            )
+            return
+    except Exception:
+        pass
+
+    # Path 2 — fallback: fire in a daemon thread
+    import threading, asyncio as _asyncio
+
+    def _run():
+        from monitor.core import check_site as _cs
+        _asyncio.run(_cs(site, force=True))
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 @app.route("/sites/add", methods=["GET", "POST"])
 def site_add():
     error = ""
@@ -1298,7 +1334,9 @@ def site_add():
             else:
                 data["sites"].append(site)
                 save_yaml(data)
-                flash(f"Site \"{site['name']}\" added successfully.", "success")
+                # Trigger an immediate baseline check via the running scheduler
+                _trigger_immediate_check(site)
+                flash(f"Site \"{site['name']}\" added. Baseline check starting…", "success")
                 return redirect(url_for("index"))
         else:
             # Re-populate form fields from raw form data on error
@@ -1355,7 +1393,9 @@ def site_edit(site_name):
                         conn.commit()
                 data["sites"][idx] = new_site
                 save_yaml(data)
-                flash(f"Site \"{new_site['name']}\" updated.", "success")
+                # Re-check immediately so any URL/settings change takes effect now
+                _trigger_immediate_check(new_site)
+                flash(f"Site \"{new_site['name']}\" updated. Re-checking now…", "success")
                 return redirect(url_for("index"))
 
         # Re-populate on error
