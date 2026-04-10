@@ -77,7 +77,8 @@ async def watchdog_check(sites: list):
         last_time = datetime.strptime(
             last_check[0][:19], "%Y-%m-%d %H:%M:%S"
         )
-        silence_minutes = (datetime.now() - last_time).total_seconds() / 60
+        from datetime import timezone
+          silence_minutes = (datetime.now(timezone.utc).replace(tzinfo=None) - last_time).total_seconds() / 60
 
         if silence_minutes > max_silence:
             console.log(
