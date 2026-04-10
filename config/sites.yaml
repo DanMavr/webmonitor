@@ -7,7 +7,7 @@ sites:
     schedule_type: interval
     interval_minutes: 720
     javascript: true
-    js_wait_seconds: 6
+    js_wait_seconds: 10
     notify:
       - telegram
     crawl:
@@ -24,6 +24,14 @@ sites:
         - "/feed"
         - "/cart"
         - "/account"
+        - "/about-us"
+        - "/corporate"
+        - "/mongolia"
+        - "/operations"
+        - "/contact"
+        - "/blockxx_psc"
+        - "/author/"
+        - "/category/"
         - ".pdf"
         - ".jpg"
         - ".jpeg"
@@ -35,7 +43,7 @@ sites:
         - ".xls"
         - ".xlsx"
     min_content_words: 20
-    min_change_percent: 3
+    min_change_percent: 1
 
   # ── LSE RNS ─────────────────────────────────────────────────────────────────
   # URL confirmed correct by user — /analysis page contains the news table
