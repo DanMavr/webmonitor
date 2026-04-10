@@ -38,24 +38,50 @@ DIFF_NOTIFY_LINES = 20   # lines sent in Telegram message
 def extract_content(html: str, site: dict) -> str:
     """
     Extract clean text from HTML.
-    Removes scripts, styles, and any site-specific ignore_selectors.
-    Also captures href links so new document links are not missed.
+
+    If target_selector is set in site config, only text inside that CSS
+    selector is extracted — everything else on the page is ignored.
+    This is the cleanest way to monitor a specific section of a page
+    (e.g. just the RNS announcements table on LSE, ignoring nav/prices).
+
+    Without target_selector, the full page text is extracted minus any
+    ignore_selectors.
+
+    Also captures href links so new document/filing links are not missed.
     """
     soup = BeautifulSoup(html, "lxml")
 
+    # Always strip non-content tags first
     for tag in soup(["script", "style", "meta", "noscript"]):
         tag.decompose()
 
+    # ── Target selector: only watch a specific section ────────────────────
+    target_sel = site.get("target_selector", "").strip()
+    if target_sel:
+        target_el = soup.select_one(target_sel)
+        if target_el:
+            # Work only within the targeted element
+            soup = target_el
+            logger.debug(f"target_selector '{target_sel}' matched — extracting section only")
+        else:
+            logger.warning(
+                f"target_selector '{target_sel}' not found in page for "
+                f"{site.get('name', '?')} — falling back to full page"
+            )
+
+    # ── Ignore selectors: strip noise elements ────────────────────────────
     for selector in site.get("ignore_selectors", []):
-        for el in soup.select(selector):
+        for el in (soup.select(selector) if hasattr(soup, "select") else []):
             el.decompose()
 
     # Capture visible text
-    text = " ".join(soup.get_text(separator=" ").split())
+    text_node = soup if hasattr(soup, "get_text") else soup
+    text = " ".join(text_node.get_text(separator=" ").split())
 
     # Append all href links so new document/filing links are detectable
     links = []
-    for a in soup.find_all("a", href=True):
+    find_fn = soup.find_all if hasattr(soup, "find_all") else lambda *a, **k: []
+    for a in find_fn("a", href=True):
         href = a["href"].strip()
         # Only include meaningful links — skip anchors and javascript: hrefs
         if href and not href.startswith("#") and not href.lower().startswith("javascript"):
