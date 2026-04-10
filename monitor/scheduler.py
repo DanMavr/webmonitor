@@ -1,123 +1,141 @@
-"""
-Handles both simple interval schedules and
-time-window based schedules with timezone support.
-"""
-
 import logging
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
-DAYS = {
-    "mon": 0,
-    "tue": 1,
-    "wed": 2,
-    "thu": 3,
-    "fri": 4,
-    "sat": 5,
-    "sun": 6,
+DAY_MAP = {
+    "mon": 0, "tue": 1, "wed": 2,
+    "thu": 3, "fri": 4, "sat": 5, "sun": 6
 }
 
 
 def parse_day_range(day_str: str) -> list[int]:
     """
-    Converts day string to list of weekday numbers.
+    Parse a day range string into a list of weekday integers (0=Mon, 6=Sun).
 
-    "mon-fri" -> [0, 1, 2, 3, 4]
-    "mon"     -> [0]
-    "sat-sun" -> [5, 6]
+    Examples:
+        "mon-fri"  → [0, 1, 2, 3, 4]
+        "sat-sun"  → [5, 6]
+        "mon"      → [0]
+
+    Raises ValueError for unrecognised day names or wrap-around ranges
+    (e.g. "fri-mon") which are ambiguous and likely a config mistake.
     """
     day_str = day_str.lower().strip()
 
     if "-" in day_str:
-        start, end = day_str.split("-")
-        start_num = DAYS[start.strip()]
-        end_num = DAYS[end.strip()]
-        return list(range(start_num, end_num + 1))
-    else:
-        return [DAYS[day_str]]
+        parts = day_str.split("-", 1)
+        start_str = parts[0].strip()
+        end_str   = parts[1].strip()
+
+        if start_str not in DAY_MAP:
+            raise ValueError(f"Unrecognised day name: '{start_str}'")
+        if end_str not in DAY_MAP:
+            raise ValueError(f"Unrecognised day name: '{end_str}'")
+
+        start_int = DAY_MAP[start_str]
+        end_int   = DAY_MAP[end_str]
+
+        if start_int > end_int:
+            raise ValueError(
+                f"Wrap-around day range '{day_str}' is not supported. "
+                f"Split into two separate windows instead."
+            )
+
+        return list(range(start_int, end_int + 1))
+
+    if day_str not in DAY_MAP:
+        raise ValueError(f"Unrecognised day name: '{day_str}'")
+
+    return [DAY_MAP[day_str]]
 
 
-def parse_time(time_str: str) -> tuple[int, int]:
+def parse_time(t: str) -> tuple[int, int]:
     """
-    Converts "07:10" to (7, 10)
+    Parse 'HH:MM' into (hour, minute).
+    Raises ValueError on bad format.
     """
-    parts = time_str.strip().split(":")
-    return int(parts[0]), int(parts[1])
+    try:
+        h, m = t.split(":")
+        return int(h), int(m)
+    except Exception:
+        raise ValueError(f"Cannot parse time string: '{t}' — expected HH:MM")
 
 
-def is_in_window(site: dict) -> tuple[bool, int]:
+def is_in_window(site: dict) -> tuple[bool, str]:
     """
-    Checks if current time falls within any of the
-    site's monitoring windows.
+    Check whether the current time falls inside any of the site's
+    scheduled windows.
 
-    Returns (should_check, interval_minutes)
-    Returns (False, 0) if outside all windows.
+    Returns:
+        (True,  reason_string)  — inside a window, should run
+        (False, reason_string)  — outside all windows, should skip
     """
-    schedule_type = site.get("schedule_type", "interval")
+    windows  = site.get("windows", [])
+    tz_name  = site.get("timezone", "UTC")
 
-    # Simple interval sites always run
-    if schedule_type == "interval":
-        return True, site.get("interval_minutes", 60)
-
-    # Time window sites
-    windows = site.get("windows", [])
-    if not windows:
-        return False, 0
-
-    tz_name = site.get("timezone", "UTC")
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
-        logger.warning(f"Unknown timezone {tz_name}, using UTC")
+        logger.warning(
+            f"Unknown timezone '{tz_name}' for {site.get('name', '?')}, "
+            f"falling back to UTC"
+        )
         tz = ZoneInfo("UTC")
 
-    now = datetime.now(tz)
-    current_day = now.weekday()   # 0=Monday, 6=Sunday
-    current_hour = now.hour
-    current_minute = now.minute
-    current_total_minutes = current_hour * 60 + current_minute
+    now              = datetime.now(tz)
+    current_weekday  = now.weekday()
+    current_time     = now.time()
 
     for window in windows:
-        # Check day
-        allowed_days = parse_day_range(window.get("days", "mon-fri"))
-        if current_day not in allowed_days:
+        days_str = window.get("days", "mon-fri")
+        from_str = window.get("from", "00:00")
+        to_str   = window.get("to",   "23:59")
+
+        try:
+            allowed_days       = parse_day_range(days_str)
+            from_h, from_m     = parse_time(from_str)
+            to_h,   to_m       = parse_time(to_str)
+        except ValueError as e:
+            logger.error(
+                f"Bad window config for {site.get('name', '?')}: {e}"
+            )
             continue
 
-        # Check time range
-        from_h, from_m = parse_time(window.get("from", "00:00"))
-        to_h, to_m = parse_time(window.get("to", "23:59"))
+        from_time = dt_time(from_h, from_m)
+        to_time   = dt_time(to_h,   to_m)
 
-        from_total = from_h * 60 + from_m
-        to_total = to_h * 60 + to_m
+        if current_weekday in allowed_days and from_time <= current_time <= to_time:
+            return True, f"in window: {days_str} {from_str}–{to_str}"
 
-        if from_total <= current_total_minutes < to_total:
-            return True, window.get("interval_minutes", 60)
-
-    return False, 0
+    return False, "outside all windows"
 
 
 def get_next_window_info(site: dict) -> str:
     """
-    Returns a human readable string of when the next
-    monitoring window starts. Used in status display.
+    Return a human-readable schedule summary string for the startup table.
+
+    Examples:
+        "every 30min"
+        "mon-fri 07:10-17:00 every 5min | sat-sun 09:00-13:00 every 30min"
     """
     schedule_type = site.get("schedule_type", "interval")
 
     if schedule_type == "interval":
-        return f"Every {site.get('interval_minutes', 60)} minutes"
+        interval = site.get("interval_minutes", 60)
+        return f"every {interval}min"
 
     windows = site.get("windows", [])
     if not windows:
-        return "No schedule configured"
+        return "time_window (no windows defined)"
 
-    lines = []
+    parts = []
     for w in windows:
-        lines.append(
-            f"{w.get('days', '?')} "
-            f"{w.get('from', '?')}-{w.get('to', '?')} "
-            f"every {w.get('interval_minutes', '?')}min"
-        )
+        days = w.get("days", "?")
+        frm  = w.get("from", "?")
+        to   = w.get("to",   "?")
+        mins = w.get("interval_minutes", "?")
+        parts.append(f"{days} {frm}–{to} every {mins}min")
 
-    return " | ".join(lines)
+    return " | ".join(parts)
