@@ -174,4 +174,160 @@ def compute_text_diff(old_text: str, new_text: str) -> dict:
 
     added = [
         l[1:] for l in diff
-        if l.startswith("+
+        if l.startswith("+") and not l.startswith("+++")
+    ]
+    removed = [
+        l[1:] for l in diff
+        if l.startswith("-") and not l.startswith("---")
+    ]
+
+    ratio = difflib.SequenceMatcher(None, old_text, new_text).ratio()
+
+    return {
+        "type": "text",
+        "added": added,
+        "removed": removed,
+        "added_count": len(added),
+        "removed_count": len(removed),
+        "change_percent": round((1 - ratio) * 100, 2),
+        "unified_diff": "\n".join(diff[:80]),
+    }
+
+
+async def check_single_url(url: str, site: dict) -> dict | None:
+    try:
+        content, checksum = await fetch_page(url, site)
+        word_count = len(content.split())
+        min_words = site.get("min_content_words", MIN_CONTENT_WORDS_DEFAULT)
+        last = get_last_snapshot(site["name"], url)
+
+        if last is None:
+            save_snapshot(site["name"], url, content, checksum)
+            console.log(
+                f"  [green]✓[/green] Baseline saved — "
+                f"[dim]{url[:60]}[/dim]"
+            )
+            logger.info(f"  Baseline saved: {url[:80]}")
+            return None
+
+        last_word_count = len((last["content"] or "").split())
+
+        if last_word_count < min_words and word_count >= min_words:
+            save_snapshot(site["name"], url, content, checksum)
+            console.log(
+                f"  [green]✓[/green] Baseline replaced "
+                f"({last_word_count} → {word_count} words) — "
+                f"[dim]{url[:60]}[/dim]"
+            )
+            logger.info(
+                f"  Baseline replaced ({last_word_count}→{word_count} words): {url[:80]}"
+            )
+            return None
+
+        if last_word_count < min_words and word_count < min_words:
+            console.log(
+                f"  [yellow]⚠[/yellow] Thin content "
+                f"({word_count} words) — skipping — "
+                f"[dim]{url[:60]}[/dim]"
+            )
+            return None
+
+        if last["checksum"] == checksum:
+            return None
+
+        diff = compute_text_diff(last["content"], content)
+
+        if diff["change_percent"] < site.get("min_change_percent", 1):
+            save_snapshot(site["name"], url, content, checksum)
+            return None
+
+        save_snapshot(site["name"], url, content, checksum)
+        save_change(
+            site["name"], url,
+            last["checksum"], checksum,
+            str(diff["change_percent"]),
+            diff["unified_diff"]
+        )
+        logger.info(
+            f"  Change detected ({diff['change_percent']}%): {url[:80]}"
+        )
+        return {"url": url, "diff": diff}
+
+    except Exception as e:
+        logger.warning(f"Failed to check {url}: {e}")
+        return {"error": True, "url": url, "message": str(e)}
+
+
+async def check_site(site: dict, force: bool = False):
+    from monitor.scheduler import is_in_window
+
+    name = site["name"]
+    mode = site.get("mode", "single_page")
+
+    if not force:
+        should_check, interval = is_in_window(site)
+        if not should_check:
+            logger.debug(f"Outside window, skipping: {name}")
+            return
+    else:
+        console.log(f"  [dim](forced — bypassing time window)[/dim]")
+
+    console.log(f"[cyan]Checking:[/cyan] {name}")
+    logger.info(f"Checking: {name}")
+
+    try:
+        urls = crawler.get_pages_to_monitor(site)
+
+        if mode == "whole_site":
+            console.log(f"  [dim]Found {len(urls)} pages[/dim]")
+
+        errors = []
+        changes_found = []
+
+        for url in urls:
+            result = await check_single_url(url, site)
+            if result is None:
+                pass
+            elif result.get("error"):
+                errors.append(result)
+            else:
+                changes_found.append(result)
+
+        if errors and not changes_found:
+            total_urls = len(urls)
+            error_count = len(errors)
+            if error_count == total_urls:
+                error_msgs = "; ".join(
+                    f"{r['url'][:50]}: {r['message']}" for r in errors
+                )
+                console.log(f"  [red]-> All fetches failed:[/red] {error_msgs}")
+                logger.error(f"  All fetches failed: {name} — {error_msgs}")
+                log_job(name, "error", f"All fetches failed: {error_msgs}")
+                return
+            else:
+                logger.warning(
+                    f"{error_count}/{total_urls} pages had errors for {name}"
+                )
+
+        if not changes_found:
+            console.log(f"  [dim]-> No changes[/dim]")
+            logger.info(f"  No changes: {name}")
+            log_job(name, "success", "No change")
+            return
+
+        from monitor import notify
+
+        if mode == "whole_site":
+            await notify.notify_site_summary(site, changes_found)
+        else:
+            await notify.send_notifications(
+                site, changes_found[0]["diff"],
+                changes_found[0]["url"]
+            )
+
+        log_job(name, "success", f"{len(changes_found)} page(s) changed")
+
+    except Exception as e:
+        console.log(f"[red]Error:[/red] {name} - {e}")
+        logger.error(f"Error: {name} — {e}")
+        log_job(name, "error", str(e))
