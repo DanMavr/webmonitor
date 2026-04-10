@@ -132,7 +132,12 @@ async def fetch_page(url: str, site: dict) -> str:
 
     # Try requests first (fast)
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=20)
+        resp = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=20,
+            verify=site.get("ssl_verify", True)
+        )
         resp.raise_for_status()
         html = resp.text
     except Exception as e:
