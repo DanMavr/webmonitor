@@ -9,6 +9,93 @@ DB = "data/monitor.db"
 SNAPSHOT_KEEP = 5
 
 
+def _col_names(conn, table: str) -> list[str]:
+    """Return the list of column names for a table."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return [r[1] for r in rows]
+
+
+def _migrate_if_needed(conn):
+    """
+    Detect old schema (from early versions that used id + screenshot columns)
+    and migrate to the current schema in-place, preserving all data.
+    Called once inside init_db() after tables are created.
+    """
+    cols = _col_names(conn, "snapshots")
+
+    # Old schema had 'id' and 'screenshot' columns — current schema has neither
+    if "id" not in cols and "screenshot" not in cols:
+        return  # already current, nothing to do
+
+    logger.warning("Old DB schema detected — running migration to current schema")
+
+    # ── snapshots ────────────────────────────────────────────────────────────
+    if "id" in _col_names(conn, "snapshots") or "screenshot" in _col_names(conn, "snapshots"):
+        conn.execute("ALTER TABLE snapshots RENAME TO snapshots_old")
+        conn.execute("""
+            CREATE TABLE snapshots (
+                site_name TEXT,
+                url       TEXT,
+                content   TEXT,
+                checksum  TEXT,
+                timestamp TEXT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO snapshots (site_name, url, content, checksum, timestamp)
+            SELECT site_name, url, content, checksum, timestamp
+            FROM snapshots_old
+        """)
+        conn.execute("DROP TABLE snapshots_old")
+        logger.warning("Migrated snapshots table")
+
+    # ── changes ──────────────────────────────────────────────────────────────
+    if "id" in _col_names(conn, "changes") or "diff_screenshot" in _col_names(conn, "changes"):
+        conn.execute("ALTER TABLE changes RENAME TO changes_old")
+        conn.execute("""
+            CREATE TABLE changes (
+                site_name    TEXT,
+                url          TEXT,
+                old_checksum TEXT,
+                new_checksum TEXT,
+                change_pct   TEXT,
+                diff_text    TEXT,
+                timestamp    TEXT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO changes (site_name, url, old_checksum, new_checksum,
+                                 change_pct, diff_text, timestamp)
+            SELECT site_name, url, old_checksum, new_checksum,
+                   change_pct, diff_text, timestamp
+            FROM changes_old
+        """)
+        conn.execute("DROP TABLE changes_old")
+        logger.warning("Migrated changes table")
+
+    # ── job_log ───────────────────────────────────────────────────────────────
+    if "id" in _col_names(conn, "job_log"):
+        conn.execute("ALTER TABLE job_log RENAME TO job_log_old")
+        conn.execute("""
+            CREATE TABLE job_log (
+                site_name TEXT,
+                status    TEXT,
+                message   TEXT,
+                timestamp TEXT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO job_log (site_name, status, message, timestamp)
+            SELECT site_name, status, message, timestamp
+            FROM job_log_old
+        """)
+        conn.execute("DROP TABLE job_log_old")
+        logger.warning("Migrated job_log table")
+
+    conn.commit()
+    logger.warning("DB migration complete")
+
+
 def init_db():
     with sqlite3.connect(DB) as conn:
         c = conn.cursor()
@@ -63,6 +150,9 @@ def init_db():
         """)
 
         conn.commit()
+
+        # Migrate old schema if present (idempotent — safe to run every startup)
+        _migrate_if_needed(conn)
 
 
 def get_last_snapshot(url: str) -> dict | None:
