@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, send_file, redirect, url_for, jsonify
+from flask import Flask, render_template_string, send_file, redirect, url_for, jsonify, request, flash
 import sqlite3
 import yaml
 import asyncio
@@ -6,6 +6,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
+app.secret_key = "webmonitor-secret-key-change-me"
 DB = "data/monitor.db"
 CONFIG = "config/sites.yaml"
 DISPLAY_TZ = ZoneInfo("Europe/Prague")
@@ -152,7 +153,21 @@ TEMPLATE = """
   </div>
 
   <!-- Monitored Sites Table -->
-  <h2>Monitored Sites</h2>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+    <h2 style="margin:0">Monitored Sites</h2>
+    <a href="/sites/add" class="btn-check" style="font-size:13px;padding:8px 16px">+ Add Site</a>
+  </div>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div style="background:{% if category=='error' %}#450a0a{% else %}#052e16{% endif %};
+                    color:{% if category=='error' %}#f87171{% else %}#22c55e{% endif %};
+                    padding:10px 16px;border-radius:8px;margin-bottom:16px;font-size:14px">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
   <table>
     <thead>
       <tr>
@@ -162,6 +177,7 @@ TEMPLATE = """
         <th>Last Check</th>
         <th>Changes</th>
         <th>Status</th>
+        <th>Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -190,6 +206,19 @@ TEMPLATE = """
              style="color:#38bdf8;font-size:11px">
             Inspect
           </a>
+        </td>
+        <td style="white-space:nowrap">
+          <a href="/sites/edit/{{ site.name }}"
+             style="color:#38bdf8;font-size:12px;margin-right:12px">Edit</a>
+          <form method="POST" action="/sites/delete/{{ site.name }}"
+                style="display:inline"
+                onsubmit="return confirm('Delete {{ site.name }}? This cannot be undone.')">
+            <button type="submit"
+                    style="background:none;border:none;color:#f87171;
+                           font-size:12px;cursor:pointer;padding:0">
+              Delete
+            </button>
+          </form>
         </td>
       </tr>
       {% endfor %}
@@ -811,6 +840,564 @@ def view_logs():
     """
 
     return render_template_string(LOG_TEMPLATE, lines=parsed)
+
+
+# ── YAML helpers ──────────────────────────────────────────────────────────────
+
+def load_yaml_raw() -> dict:
+    """Load the full sites.yaml as a dict, preserving structure."""
+    with open(CONFIG) as f:
+        return yaml.safe_load(f) or {"sites": []}
+
+
+def save_yaml(data: dict):
+    """Write the sites dict back to sites.yaml with clean formatting."""
+    with open(CONFIG, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def find_site_index(sites: list, name: str) -> int:
+    """Return the index of a site by name, or -1 if not found."""
+    for i, s in enumerate(sites):
+        if s.get("name") == name:
+            return i
+    return -1
+
+
+def form_to_site(form) -> tuple[dict | None, str]:
+    """
+    Convert a Flask form submission into a site config dict.
+    Returns (site_dict, error_message).  error_message is "" on success.
+    """
+    name = form.get("name", "").strip()
+    url  = form.get("url", "").strip()
+    if not name:
+        return None, "Site name is required."
+    if not url:
+        return None, "URL is required."
+
+    mode          = form.get("mode", "single_page")
+    schedule_type = form.get("schedule_type", "interval")
+
+    site = {
+        "name": name,
+        "url":  url,
+        "mode": mode,
+        "schedule_type": schedule_type,
+        "notify": ["telegram"],
+    }
+
+    # SSL
+    if form.get("ssl_verify") == "false":
+        site["ssl_verify"] = False
+
+    # JavaScript
+    if form.get("javascript") == "true":
+        site["javascript"] = True
+        js_wait = form.get("js_wait_seconds", "").strip()
+        if js_wait:
+            try:
+                site["js_wait_seconds"] = int(js_wait)
+            except ValueError:
+                pass
+
+    # Timezone (only relevant for time_window but harmless otherwise)
+    tz = form.get("timezone", "").strip()
+    if tz:
+        site["timezone"] = tz
+
+    # Schedule
+    if schedule_type == "interval":
+        try:
+            site["interval_minutes"] = int(form.get("interval_minutes", 60))
+        except ValueError:
+            site["interval_minutes"] = 60
+    else:  # time_window — raw YAML block
+        windows_yaml = form.get("windows_yaml", "").strip()
+        if windows_yaml:
+            try:
+                parsed = yaml.safe_load(windows_yaml)
+                if isinstance(parsed, list):
+                    site["windows"] = parsed
+                else:
+                    return None, "Windows YAML must be a list (starts with -). See the example."
+            except yaml.YAMLError as e:
+                return None, f"Windows YAML parse error: {e}"
+        else:
+            return None, "Time-window schedule requires at least one window. See the example."
+
+    # Sensitivity
+    try:
+        min_words = int(form.get("min_content_words", 50))
+        site["min_content_words"] = min_words
+    except ValueError:
+        pass
+
+    try:
+        min_pct = float(form.get("min_change_percent", 3))
+        site["min_change_percent"] = min_pct
+    except ValueError:
+        pass
+
+    # Ignore selectors
+    selectors_raw = form.get("ignore_selectors", "").strip()
+    if selectors_raw:
+        site["ignore_selectors"] = [s.strip() for s in selectors_raw.splitlines() if s.strip()]
+
+    # Crawl settings (whole_site only)
+    if mode == "whole_site":
+        crawl = {}
+        crawl["use_sitemap"]    = form.get("use_sitemap", "true") == "true"
+        crawl["stay_on_domain"] = form.get("stay_on_domain", "true") == "true"
+        try:
+            crawl["max_pages"] = int(form.get("max_pages", 50))
+        except ValueError:
+            crawl["max_pages"] = 50
+        excl_raw = form.get("exclude_patterns", "").strip()
+        if excl_raw:
+            crawl["exclude_patterns"] = [p.strip() for p in excl_raw.splitlines() if p.strip()]
+        site["crawl"] = crawl
+
+    return site, ""
+
+
+# ── Site form template ─────────────────────────────────────────────────────────
+
+SITE_FORM_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebMonitor — {{ page_title }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0 }
+    body { background: #0f172a; color: #e2e8f0;
+           font-family: system-ui, sans-serif; padding: 32px 24px }
+    a.back { color: #38bdf8; font-size: 13px; text-decoration: none;
+             display: inline-block; margin-bottom: 24px }
+    a.back:hover { color: #7dd3fc }
+    h1 { font-size: 20px; font-weight: 700; color: #f8fafc; margin-bottom: 28px }
+    h1 span { color: #38bdf8 }
+    .form-card { background: #1e293b; border: 1px solid #334155;
+                 border-radius: 14px; padding: 28px; max-width: 700px }
+    .section-title { font-size: 12px; font-weight: 700; text-transform: uppercase;
+                     letter-spacing: .08em; color: #64748b; margin: 24px 0 14px;
+                     padding-bottom: 6px; border-bottom: 1px solid #334155 }
+    .field { margin-bottom: 16px }
+    label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 5px }
+    label span.req { color: #f87171; margin-left: 2px }
+    input[type=text], input[type=number], input[type=url], select, textarea {
+      width: 100%; background: #0f172a; border: 1px solid #334155;
+      color: #e2e8f0; padding: 9px 12px; border-radius: 8px;
+      font-size: 14px; font-family: inherit;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none; border-color: #38bdf8;
+    }
+    textarea { resize: vertical; min-height: 90px; font-family: monospace; font-size: 12px }
+    .hint { font-size: 11px; color: #475569; margin-top: 4px }
+    .toggle-row { display: flex; gap: 24px; align-items: center; margin-bottom: 16px }
+    .toggle-group { display: flex; align-items: center; gap: 8px }
+    .toggle-group label { margin: 0; cursor: pointer; font-size: 13px; color: #94a3b8 }
+    input[type=checkbox] { width: 16px; height: 16px; cursor: pointer;
+                           accent-color: #38bdf8 }
+    .collapsible { border: 1px solid #334155; border-radius: 10px;
+                   overflow: hidden; margin-top: 8px }
+    .collapsible-header { background: #0f172a; padding: 12px 16px;
+                          cursor: pointer; font-size: 13px; color: #94a3b8;
+                          display: flex; justify-content: space-between;
+                          align-items: center; user-select: none }
+    .collapsible-header:hover { color: #e2e8f0 }
+    .collapsible-body { padding: 20px; display: none }
+    .collapsible-body.open { display: block }
+    .example-box { background: #0a1628; border: 1px solid #1e3a5f;
+                   border-radius: 8px; padding: 14px 16px; margin-top: 10px }
+    .example-box .ex-title { font-size: 11px; color: #38bdf8; font-weight: 700;
+                              text-transform: uppercase; letter-spacing: .06em;
+                              margin-bottom: 8px }
+    .example-box pre { font-size: 11px; color: #7dd3fc; line-height: 1.6;
+                       white-space: pre; font-family: monospace }
+    .example-box .ex-note { font-size: 11px; color: #475569; margin-top: 8px }
+    .error-box { background: #450a0a; color: #f87171; border-radius: 8px;
+                 padding: 12px 16px; margin-bottom: 20px; font-size: 14px }
+    .btn-row { display: flex; gap: 12px; margin-top: 24px; align-items: center }
+    .btn-save {
+      background: #0ea5e9; color: #fff; border: none;
+      padding: 11px 28px; border-radius: 8px; font-size: 14px;
+      font-weight: 600; cursor: pointer;
+    }
+    .btn-save:hover { background: #38bdf8 }
+    .btn-cancel { color: #64748b; font-size: 13px; text-decoration: none }
+    .btn-cancel:hover { color: #94a3b8 }
+    #crawl-section { display: none }
+    #interval-section { display: block }
+    #timewindow-section { display: none }
+    #js-fields { display: none }
+  </style>
+</head>
+<body>
+  <a href="/" class="back">← Back to dashboard</a>
+  <h1>{{ page_title }}</h1>
+
+  {% if error %}
+    <div class="error-box">{{ error }}</div>
+  {% endif %}
+
+  <div class="form-card">
+    <form method="POST">
+
+      <!-- ── BASIC ── -->
+      <div class="section-title">Basic</div>
+
+      <div class="field">
+        <label>Site name <span class="req">*</span></label>
+        <input type="text" name="name" value="{{ site.name or '' }}"
+               placeholder="e.g. LSE - RNS" required>
+        <div class="hint">Display name shown on the dashboard. Must be unique.</div>
+      </div>
+
+      <div class="field">
+        <label>URL <span class="req">*</span></label>
+        <input type="url" name="url" value="{{ site.url or '' }}"
+               placeholder="https://example.com/page" required>
+      </div>
+
+      <div class="field">
+        <label>Monitoring mode</label>
+        <select name="mode" id="mode-select" onchange="onModeChange(this.value)">
+          <option value="single_page" {% if site.mode != 'whole_site' %}selected{% endif %}>
+            single_page — monitor one specific page only
+          </option>
+          <option value="whole_site" {% if site.mode == 'whole_site' %}selected{% endif %}>
+            whole_site — crawl and monitor multiple pages
+          </option>
+        </select>
+      </div>
+
+      <!-- ── SCHEDULE ── -->
+      <div class="section-title">Schedule</div>
+
+      <div class="field">
+        <label>Schedule type</label>
+        <select name="schedule_type" id="sched-select"
+                onchange="onSchedChange(this.value)">
+          <option value="interval"
+            {% if site.schedule_type != 'time_window' %}selected{% endif %}>
+            interval — check every N minutes, always
+          </option>
+          <option value="time_window"
+            {% if site.schedule_type == 'time_window' %}selected{% endif %}>
+            time_window — check only during defined time windows
+          </option>
+        </select>
+      </div>
+
+      <div id="interval-section">
+        <div class="field">
+          <label>Check interval (minutes)</label>
+          <input type="number" name="interval_minutes" min="1" max="10080"
+                 value="{{ site.interval_minutes or 360 }}">
+          <div class="hint">Common values: 60 (1h), 360 (6h), 720 (12h)</div>
+        </div>
+      </div>
+
+      <div id="timewindow-section">
+        <div class="field">
+          <label>Timezone</label>
+          <input type="text" name="timezone"
+                 value="{{ site.timezone or 'Europe/London' }}"
+                 placeholder="Europe/London">
+          <div class="hint">IANA timezone name. Used to interpret window times.</div>
+        </div>
+        <div class="field">
+          <label>Windows (YAML)</label>
+          <textarea name="windows_yaml" id="windows-yaml"
+                    placeholder="Paste your windows YAML here..."
+                    rows="8">{{ windows_yaml or '' }}</textarea>
+          <div class="hint">Define one or more time windows as a YAML list.</div>
+
+          <!-- Example box -->
+          <div class="example-box" style="margin-top:12px">
+            <div class="ex-title">Example — LSE RNS style (two windows)</div>
+            <pre>- days: mon-fri
+  from: "06:55"
+  to: "07:10"
+  interval_minutes: 1
+
+- days: mon-fri
+  from: "07:10"
+  to: "17:00"
+  interval_minutes: 5</pre>
+            <div class="ex-note">
+              Window 1: checks every <strong>1 min</strong> from 06:55–07:10 Mon–Fri
+              (catches the early morning RNS drop).<br>
+              Window 2: checks every <strong>5 min</strong> from 07:10–17:00 Mon–Fri
+              (full market hours coverage).<br><br>
+              Valid day values: <code>mon tue wed thu fri sat sun</code>
+              or ranges like <code>mon-fri</code> · <code>sat-sun</code><br>
+              Times in <code>HH:MM</code> 24h format.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── SENSITIVITY ── -->
+      <div class="collapsible">
+        <div class="collapsible-header" onclick="toggleSection('sensitivity-body','sensitivity-arrow')">
+          Sensitivity &amp; Filters
+          <span id="sensitivity-arrow">▸</span>
+        </div>
+        <div class="collapsible-body" id="sensitivity-body">
+          <div class="field">
+            <label>Min content words</label>
+            <input type="number" name="min_content_words" min="0"
+                   value="{{ site.min_content_words or 50 }}">
+            <div class="hint">Pages with fewer words are skipped (likely empty/error pages).</div>
+          </div>
+          <div class="field">
+            <label>Min change % to trigger alert</label>
+            <input type="number" name="min_change_percent" min="0" max="100" step="0.5"
+                   value="{{ site.min_change_percent or 3 }}">
+            <div class="hint">Changes smaller than this percentage are ignored.</div>
+          </div>
+          <div class="field">
+            <label>Ignore selectors (one per line)</label>
+            <textarea name="ignore_selectors"
+                      placeholder=".timestamp&#10;.price-ticker&#10;[data-testid='time']"
+                      >{{ ignore_selectors_text or '' }}</textarea>
+            <div class="hint">CSS selectors for elements to exclude from change detection
+              (clocks, live prices, etc.).</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── JAVASCRIPT ── -->
+      <div class="collapsible" style="margin-top:10px">
+        <div class="collapsible-header" onclick="toggleSection('js-body','js-arrow')">
+          JavaScript Rendering
+          <span id="js-arrow">▸</span>
+        </div>
+        <div class="collapsible-body" id="js-body">
+          <div class="toggle-row">
+            <div class="toggle-group">
+              <input type="checkbox" id="js-toggle" name="javascript" value="true"
+                     onchange="document.getElementById('js-wait-field').style.display=this.checked?'block':'none'"
+                     {% if site.javascript %}checked{% endif %}>
+              <label for="js-toggle">Enable Selenium JS rendering (slower, for JS-heavy sites)</label>
+            </div>
+          </div>
+          <div id="js-wait-field" style="display:{% if site.javascript %}block{% else %}none{% endif %}">
+            <div class="field">
+              <label>JS wait seconds</label>
+              <input type="number" name="js_wait_seconds" min="1" max="30"
+                     value="{{ site.js_wait_seconds or 5 }}">
+              <div class="hint">Seconds to wait for page JS to finish rendering.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── ADVANCED ── -->
+      <div class="collapsible" style="margin-top:10px">
+        <div class="collapsible-header" onclick="toggleSection('adv-body','adv-arrow')">
+          Advanced
+          <span id="adv-arrow">▸</span>
+        </div>
+        <div class="collapsible-body" id="adv-body">
+          <div class="toggle-row">
+            <div class="toggle-group">
+              <input type="checkbox" id="ssl-toggle" name="ssl_verify" value="false"
+                     {% if site.ssl_verify == False %}checked{% endif %}>
+              <label for="ssl-toggle">Disable SSL certificate verification
+                (only for sites with self-signed certs)</label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── CRAWL ── -->
+      <div id="crawl-section">
+        <div class="section-title" style="margin-top:24px">Crawl Settings (whole_site)</div>
+        <div class="toggle-row">
+          <div class="toggle-group">
+            <input type="checkbox" id="sitemap-toggle" name="use_sitemap" value="true"
+                   {% if crawl_use_sitemap %}checked{% endif %}>
+            <label for="sitemap-toggle">Use sitemap.xml for page discovery</label>
+          </div>
+          <div class="toggle-group">
+            <input type="checkbox" id="domain-toggle" name="stay_on_domain" value="true"
+                   {% if crawl_stay_on_domain %}checked{% endif %}>
+            <label for="domain-toggle">Stay on domain</label>
+          </div>
+        </div>
+        <div class="field">
+          <label>Max pages to monitor</label>
+          <input type="number" name="max_pages" min="1" max="500"
+                 value="{{ crawl_max_pages }}">
+        </div>
+        <div class="field">
+          <label>Exclude URL patterns (one per line)</label>
+          <textarea name="exclude_patterns"
+                    placeholder="/login&#10;/search&#10;.pdf&#10;.jpg"
+                    >{{ exclude_patterns_text or '' }}</textarea>
+          <div class="hint">Any URL containing these strings will be skipped.</div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button type="submit" class="btn-save">Save Site</button>
+        <a href="/" class="btn-cancel">Cancel</a>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    function onModeChange(v) {
+      document.getElementById('crawl-section').style.display =
+        v === 'whole_site' ? 'block' : 'none';
+    }
+    function onSchedChange(v) {
+      document.getElementById('interval-section').style.display =
+        v === 'interval' ? 'block' : 'none';
+      document.getElementById('timewindow-section').style.display =
+        v === 'time_window' ? 'block' : 'none';
+    }
+    function toggleSection(bodyId, arrowId) {
+      var body  = document.getElementById(bodyId);
+      var arrow = document.getElementById(arrowId);
+      var open  = body.classList.toggle('open');
+      arrow.textContent = open ? '▾' : '▸';
+    }
+    // Init on load
+    onModeChange(document.getElementById('mode-select').value);
+    onSchedChange(document.getElementById('sched-select').value);
+  </script>
+</body>
+</html>
+"""
+
+
+# ── Site management routes ────────────────────────────────────────────────────
+
+@app.route("/sites/add", methods=["GET", "POST"])
+def site_add():
+    error = ""
+    site  = {}
+    windows_yaml      = ""
+    ignore_selectors_text = ""
+    exclude_patterns_text = ""
+
+    if request.method == "POST":
+        site, error = form_to_site(request.form)
+        if not error:
+            data = load_yaml_raw()
+            # Check for duplicate name
+            if find_site_index(data["sites"], site["name"]) >= 0:
+                error = f"A site named \"{site['name']}\" already exists. Choose a different name."
+                site = dict(request.form)  # re-populate form
+            else:
+                data["sites"].append(site)
+                save_yaml(data)
+                flash(f"Site \"{site['name']}\" added successfully.", "success")
+                return redirect(url_for("index"))
+        else:
+            # Re-populate form fields from raw form data on error
+            site = {k: v for k, v in request.form.items()}
+            windows_yaml = request.form.get("windows_yaml", "")
+            ignore_selectors_text = request.form.get("ignore_selectors", "")
+            exclude_patterns_text = request.form.get("exclude_patterns", "")
+
+    return render_template_string(
+        SITE_FORM_TEMPLATE,
+        page_title="Add Site",
+        site=site,
+        error=error,
+        windows_yaml=windows_yaml,
+        ignore_selectors_text=ignore_selectors_text,
+        exclude_patterns_text=exclude_patterns_text,
+        crawl_use_sitemap=True,
+        crawl_stay_on_domain=True,
+        crawl_max_pages=50,
+    )
+
+
+@app.route("/sites/edit/<path:site_name>", methods=["GET", "POST"])
+def site_edit(site_name):
+    data  = load_yaml_raw()
+    idx   = find_site_index(data["sites"], site_name)
+    error = ""
+
+    if idx < 0:
+        flash(f"Site \"{site_name}\" not found.", "error")
+        return redirect(url_for("index"))
+
+    existing = data["sites"][idx]
+
+    if request.method == "POST":
+        new_site, error = form_to_site(request.form)
+        if not error:
+            # If name changed, check it is not a duplicate of another site
+            if new_site["name"] != site_name:
+                other_idx = find_site_index(data["sites"], new_site["name"])
+                if other_idx >= 0 and other_idx != idx:
+                    error = f"A site named \"{new_site['name']}\" already exists."
+
+            if not error:
+                # Rename in DB if name changed
+                if new_site["name"] != site_name:
+                    import sqlite3 as _sq
+                    with _sq.connect(DB) as conn:
+                        for tbl in ("snapshots", "changes", "job_log"):
+                            conn.execute(
+                                f"UPDATE {tbl} SET site_name=? WHERE site_name=?",
+                                (new_site["name"], site_name)
+                            )
+                        conn.commit()
+                data["sites"][idx] = new_site
+                save_yaml(data)
+                flash(f"Site \"{new_site['name']}\" updated.", "success")
+                return redirect(url_for("index"))
+
+        # Re-populate on error
+        existing = {k: v for k, v in request.form.items()}
+
+    # Build pre-fill values for special fields
+    windows_yaml = ""
+    if existing.get("schedule_type") == "time_window":
+        wins = existing.get("windows", [])
+        if wins:
+            windows_yaml = yaml.dump(wins, default_flow_style=False).strip()
+
+    ignore_selectors_text = "\n".join(existing.get("ignore_selectors", []))
+    crawl = existing.get("crawl", {})
+    exclude_patterns_text = "\n".join(crawl.get("exclude_patterns", []))
+
+    return render_template_string(
+        SITE_FORM_TEMPLATE,
+        page_title=f"Edit Site — {site_name}",
+        site=existing,
+        error=error,
+        windows_yaml=windows_yaml,
+        ignore_selectors_text=ignore_selectors_text,
+        exclude_patterns_text=exclude_patterns_text,
+        crawl_use_sitemap=crawl.get("use_sitemap", True),
+        crawl_stay_on_domain=crawl.get("stay_on_domain", True),
+        crawl_max_pages=crawl.get("max_pages", 50),
+    )
+
+
+@app.route("/sites/delete/<path:site_name>", methods=["POST"])
+def site_delete(site_name):
+    data = load_yaml_raw()
+    idx  = find_site_index(data["sites"], site_name)
+    if idx < 0:
+        flash(f"Site \"{site_name}\" not found.", "error")
+        return redirect(url_for("index"))
+    data["sites"].pop(idx)
+    save_yaml(data)
+    flash(f"Site \"{site_name}\" deleted.", "success")
+    return redirect(url_for("index"))
+
 
 def start_dashboard():
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
