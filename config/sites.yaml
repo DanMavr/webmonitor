@@ -25,11 +25,11 @@ sites:
     notify:
       - telegram
 
-  - name: "LSE - Petro Matad RNS"
+   - name: "LSE - Petro Matad RNS"
     url: "https://www.londonstockexchange.com/stock/MATD/petro-matad-limited/analysis"
     javascript: true
-    js_wait_seconds: 10        # ← increased from 6, gives page more time to settle
-    min_change_percent: 5      # ← increased from default 1%, filters out noise
+    js_wait_seconds: 10
+    min_change_percent: 5
     monitor_type: "text"
     mode: "single_page"
     schedule_type: "time_window"
