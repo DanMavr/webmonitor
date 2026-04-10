@@ -26,10 +26,41 @@ from dashboard.app import start_dashboard
 load_dotenv()
 console = Console()
 
+
+class ActivityFileHandler(logging.FileHandler):
+    """
+    Writes INFO+ log records to data/activity.log with timestamps.
+    Each line: 2026-04-10 09:14:42 [LEVEL] message
+    """
+    def emit(self, record):
+        record.msg = self._strip_ansi(str(record.msg))
+        super().emit(record)
+
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        import re
+        text = re.sub(r'\x1b\[[0-9;]*m', '', text)
+        text = re.sub(r'\[[a-z/ _]+\]', '', text)
+        return text.strip()
+
+
+# Error/warning log (existing)
 logging.basicConfig(
     level=logging.WARNING,
     handlers=[logging.FileHandler("data/monitor.log")]
 )
+
+# Activity log — captures INFO and above from the monitor logger
+activity_logger = logging.getLogger("monitor")
+activity_logger.setLevel(logging.INFO)
+
+activity_handler = ActivityFileHandler("data/activity.log")
+activity_handler.setLevel(logging.INFO)
+activity_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
+                      datefmt="%Y-%m-%d %H:%M:%S")
+)
+activity_logger.addHandler(activity_handler)
 
 
 def load_sites() -> list:
@@ -57,7 +88,6 @@ async def watchdog_check(sites: list):
         name = site["name"]
         schedule_type = site.get("schedule_type", "interval")
 
-        # Skip time window sites outside their window
         if schedule_type == "time_window":
             in_window, _ = is_in_window(site)
             if not in_window:
@@ -83,10 +113,13 @@ async def watchdog_check(sites: list):
         ).total_seconds() / 60
 
         if silence_minutes > max_silence:
-            console.log(
-                f"[red]WATCHDOG: {name} has not been checked "
-                f"for {int(silence_minutes)} minutes[/red]"
+            msg = (
+                f"WATCHDOG: {name} has not been checked "
+                f"for {int(silence_minutes)} minutes "
+                f"(expected every {expected_interval} min)"
             )
+            console.log(f"[red]{msg}[/red]")
+            activity_logger.warning(msg)
 
             if token and chat_id:
                 import telegram
@@ -113,16 +146,15 @@ async def cmd_start():
     init_db()
     sites = load_sites()
 
-    # Start web dashboard in background
     t = threading.Thread(target=start_dashboard, daemon=True)
     t.start()
 
-    # Start Telegram bot in background
     try:
         from monitor.bot import start_bot
         bot_thread = threading.Thread(target=start_bot, daemon=True)
         bot_thread.start()
         console.print("Telegram bot started")
+        activity_logger.info("Telegram bot started")
     except Exception as e:
         console.print(f"Bot not started: {e}")
 
@@ -139,6 +171,7 @@ async def cmd_start():
             f"{get_next_window_info(s)}"
         )
 
+    activity_logger.info(f"WebMonitor started — {len(sites)} sites loaded")
     console.print("\nDashboard at http://localhost:5000\n")
 
     scheduler = AsyncIOScheduler()
@@ -180,7 +213,6 @@ async def cmd_start():
                 coalesce=True
             )
 
-    # Watchdog runs every hour
     scheduler.add_job(
         watchdog_check,
         "interval",
@@ -199,6 +231,7 @@ async def cmd_start():
         await asyncio.Event().wait()
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
+        activity_logger.info("WebMonitor stopped")
         console.print("\nStopped.")
 
 
