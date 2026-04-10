@@ -25,7 +25,7 @@ sites:
     notify:
       - telegram
 
-   - name: "LSE - Petro Matad RNS"
+  - name: "LSE - Petro Matad RNS"
     url: "https://www.londonstockexchange.com/stock/MATD/petro-matad-limited/analysis"
     javascript: true
     js_wait_seconds: 10
