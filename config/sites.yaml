@@ -81,7 +81,7 @@ sites:
   # ── Envoi ────────────────────────────────────────────────────────────────────
   - name: "Envoi"
     url: "https://envoi.co.uk/projects/active-projects/asia/mongolia/"
-    mode: whole_site
+    mode: single_page
     schedule_type: interval
     interval_minutes: 360
     notify:
