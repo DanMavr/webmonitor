@@ -9,10 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 from rich.console import Console
 
-from monitor.storage import (
-    get_last_snapshot, save_snapshot,
-    save_change, log_job
-)
+from monitor.storage import flatten, get_last_snapshot, save_snapshot, save_change, log_job
 from monitor import crawler
 
 console = Console()
@@ -237,26 +234,7 @@ def fetch_json_api(url: str, site: dict) -> str:
         logger.warning(f"JSON API fetch failed for {url}: {e}")
         return ""
 
-    # Flatten nested JSON using dot notation (e.g. "data.news.id")
-    def flatten(obj, prefix=""):
-        items = {}
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                full_key = f"{prefix}.{k}" if prefix else k
-                if isinstance(v, (dict, list)):
-                    items.update(flatten(v, full_key))
-                else:
-                    items[full_key] = v
-        elif isinstance(obj, list):
-            for i, v in enumerate(obj):
-                full_key = f"{prefix}[{i}]"
-                if isinstance(v, (dict, list)):
-                    items.update(flatten(v, full_key))
-                else:
-                    items[full_key] = v
-        return items
-
-    flat = flatten(data)
+    flat = flatten(data)  # flatten() imported from monitor.storage
 
     # If specific fields are configured, extract only those
     watched = site.get("json_fields", [])
