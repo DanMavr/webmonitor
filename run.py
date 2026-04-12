@@ -22,6 +22,7 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.events import EVENT_JOB_ERROR
 
 from monitor.storage import init_db, log_job
 from monitor.core import check_site
@@ -179,6 +180,22 @@ async def config_watcher():
 
 
 
+def _job_error_listener(event):
+    """
+    Fired by APScheduler whenever a scheduled job raises an unhandled exception.
+    Writes to the monitor logger so it appears in activity.log,
+    and updates job_log so the dashboard shows an error status immediately.
+    """
+    from monitor.storage import log_job
+    job_id = event.job_id
+    exc    = event.exception
+    logger.error(f"APScheduler job '{job_id}' crashed: {exc}", exc_info=False)
+    try:
+        log_job(job_id, "error", f"Scheduler exception: {exc}")
+    except Exception:
+        pass  # never let logging failures cascade
+
+
 async def cmd_start():
     init_db()
     sites = load_sites()
@@ -211,6 +228,7 @@ async def cmd_start():
 
     global _scheduler
     _scheduler = AsyncIOScheduler()
+    _scheduler.add_listener(_job_error_listener, EVENT_JOB_ERROR)
 
     for site in sites:
         interval = _get_effective_interval(site)
