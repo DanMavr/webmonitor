@@ -151,6 +151,32 @@ def prune_snapshots(keep: int = PRUNE_KEEP):
         logger.info(f"prune_snapshots: removed {deleted_total} old snapshots")
 
 
+# ── Shared utilities ─────────────────────────────────────────────────────────
+
+def flatten(obj, prefix=""):
+    """
+    Recursively flatten a nested dict/list into dot-notation keys.
+    Used by both core.py (JSON diff) and app.py (JSON display).
+    List expansion capped at 5 items to prevent huge outputs.
+    """
+    items = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            full_key = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, (dict, list)):
+                items.update(flatten(v, full_key))
+            else:
+                items[full_key] = v
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj[:5]):
+            full_key = f"{prefix}[{i}]"
+            if isinstance(v, (dict, list)):
+                items.update(flatten(v, full_key))
+            else:
+                items[full_key] = v
+    return items
+
+
 # ── Baseline inspection (merged from inspect.py) ──────────────────────────────
 
 def get_baseline_summary(site_name: str) -> dict:
