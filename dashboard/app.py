@@ -696,7 +696,7 @@ def view_logs():
             all_lines = f.readlines()
         lines = all_lines[-1000:]
 
-    parsed = []
+    parsed_raw = []
     for raw in reversed(lines):
         raw = raw.strip()
         if not raw:
@@ -729,11 +729,24 @@ def view_logs():
             ts_display = ""
             message = raw
 
-        parsed.append({
+        parsed_raw.append({
             "ts": ts_display,
             "level": level,
             "message": message,
         })
+
+    # Collapse consecutive identical messages into one entry with a repeat count.
+    # Eliminates walls of "Outside window: LSE - RNS" and similar repeated lines.
+    parsed = []
+    for entry in parsed_raw:
+        if (parsed
+                and parsed[-1]["message"] == entry["message"]
+                and parsed[-1]["level"] == entry["level"]):
+            parsed[-1]["count"] = parsed[-1].get("count", 1) + 1
+            parsed[-1]["ts_first"] = entry["ts"]   # earliest occurrence
+        else:
+            entry["count"] = 1
+            parsed.append(entry)
 
     LOG_TEMPLATE = """
     <!DOCTYPE html>
@@ -840,6 +853,16 @@ def view_logs():
         <div class="log-line" data-level="{{ entry.level }}">
           <span class="ts">{{ entry.ts }}</span>
           <span class="badge badge-{{ entry.level }}">{{ entry.level }}</span>
+          {% if entry.count > 1 %}
+          <span style="background:#1e3a5f;color:#38bdf8;border-radius:10px;
+                       padding:1px 8px;font-size:11px;font-weight:700;
+                       margin-right:6px;white-space:nowrap">
+            ×{{ entry.count }} &nbsp;
+            <span style="color:#475569;font-weight:400;font-size:10px">
+              {{ entry.ts_first }} → {{ entry.ts }}
+            </span>
+          </span>
+          {% endif %}
           <span class="msg msg-{{ entry.level }}">{{ entry.message }}</span>
         </div>
         {% endfor %}
@@ -1134,13 +1157,13 @@ SITE_FORM_TEMPLATE = """
         <label>Monitoring mode</label>
         <select name="mode" id="mode-select" onchange="onModeChange(this.value)">
           <option value="single_page" {% if site.mode not in ('whole_site','json_api') %}selected{% endif %}>
-            single_page — monitor one specific page only
+            One page only — watch a single specific URL
           </option>
           <option value="whole_site" {% if site.mode == 'whole_site' %}selected{% endif %}>
-            whole_site — crawl and monitor multiple pages
+            Whole website — crawl and watch multiple pages automatically
           </option>
           <option value="json_api" {% if site.mode == 'json_api' %}selected{% endif %}>
-            json_api — watch specific fields from a JSON API
+            Data feed (JSON) — watch specific fields from a data API (advanced)
           </option>
         </select>
       </div>
@@ -1223,13 +1246,23 @@ SITE_FORM_TEMPLATE = """
             <label>Min content words</label>
             <input type="number" name="min_content_words" min="0"
                    value="{{ site.min_content_words or 50 }}">
-            <div class="hint">Pages with fewer words are skipped (likely empty/error pages).</div>
+            <div class="hint">
+              If the page returns fewer words than this, the system assumes it didn't load
+              properly and retries using a full browser (Selenium).<br>
+              Default 50 works for most sites. Set lower (e.g. 20) for intentionally short pages.
+              Set to 0 to disable the check entirely.
+            </div>
           </div>
           <div class="field">
             <label>Min change % to trigger alert</label>
             <input type="number" name="min_change_percent" min="0" max="100" step="0.5"
                    value="{{ site.min_change_percent or 3 }}">
-            <div class="hint">Changes smaller than this percentage are ignored.</div>
+            <div class="hint">
+              How much the page content must change before you get a notification.<br>
+              <strong>0–1%</strong> = very sensitive — any small addition triggers an alert (use for LSE).<br>
+              <strong>3–5%</strong> = good for pages with dynamic content (timestamps, counters, banners).<br>
+              <strong>10%+</strong> = only alert on major changes.
+            </div>
           </div>
 
           <!-- ── JSON API Fields ─────────────────────────────────────── -->
@@ -1342,14 +1375,16 @@ SITE_FORM_TEMPLATE = """
           </script>
 
           <div id="target-selector-field" class="field">
-            <label>Target selector <span style="color:#38bdf8;font-size:11px;font-weight:400;margin-left:6px">Focus monitoring on one section only</span></label>
+            <label>Watch selector — focus on one section only <span style="color:#38bdf8;font-size:11px;font-weight:400;margin-left:6px">(optional)</span></label>
             <input type="text" name="target_selector"
                    value="{{ site.target_selector or '' }}"
                    placeholder=".news-table-results-component">
             <div class="hint">
-              CSS selector for the <strong>only</strong> part of the page to monitor.
-              Everything outside this element is completely ignored.<br>
-              Leave blank to monitor the whole page.<br>
+              If set, the monitor <strong>only</strong> reads this part of the page and ignores
+              everything else.<br>
+              Use this when you want to track a specific section — a news list, a project table,
+              an announcements block — without being triggered by changes elsewhere on the page.<br>
+              Leave blank to watch the whole page (most common).<br>
               Example — LSE RNS table only: <code>.news-table-results-component</code>
             </div>
           </div>
@@ -1359,8 +1394,13 @@ SITE_FORM_TEMPLATE = """
             <textarea name="ignore_selectors"
                       placeholder=".timestamp&#10;.price-ticker&#10;[data-testid='time']"
                       >{{ ignore_selectors_text or '' }}</textarea>
-            <div class="hint">CSS selectors for elements to exclude from change detection
-              (clocks, live prices, etc.). Used together with target selector if set.</div>
+            <div class="hint">
+              Removes parts of the page before comparing so they don't trigger false alerts.<br>
+              Use this for things that change on every load but carry no useful signal:
+              navigation menus, footers, ad banners, price tickers, "last updated" labels.<br>
+              Examples: <code>header</code> &nbsp; <code>footer</code> &nbsp;
+              <code>nav</code> &nbsp; <code>.ticker</code> &nbsp; <code>#sidebar</code>
+            </div>
           </div>
         </div>
       </div>
@@ -1372,20 +1412,36 @@ SITE_FORM_TEMPLATE = """
           <span id="js-arrow">▸</span>
         </div>
         <div class="collapsible-body" id="js-body">
+          <div style="background:#0a1628;border:1px solid #1e3a5f;border-radius:8px;
+                      padding:14px 16px;margin-bottom:16px;font-size:12px;color:#7dd3fc;line-height:1.7">
+            <strong style="color:#38bdf8">When do you need this?</strong><br>
+            Some websites build their content in the browser — the page loads empty first,
+            then fills in with data. A normal fetch only gets the empty shell.<br><br>
+            <strong style="color:#38bdf8">How to tell if you need it:</strong>
+            After adding a site, check its <strong>Inspect</strong> page.
+            If it shows 0 or very few words (&lt;50), enable this.<br><br>
+            <strong style="color:#38bdf8">Trade-off:</strong>
+            Adds 5–15 seconds per check. Use only when needed.<br>
+            <strong style="color:#38bdf8">Currently enabled on:</strong>
+            LSE - RNS, GCF - Mongolia, EIC, Opendatalab - Zula, Petromatad.
+          </div>
           <div class="toggle-row">
             <div class="toggle-group">
               <input type="checkbox" id="js-toggle" name="javascript" value="true"
                      onchange="document.getElementById('js-wait-field').style.display=this.checked?'block':'none'"
                      {% if site.javascript %}checked{% endif %}>
-              <label for="js-toggle">Enable Selenium JS rendering (slower, for JS-heavy sites)</label>
+              <label for="js-toggle">Enable JavaScript rendering (full browser, slower)</label>
             </div>
           </div>
           <div id="js-wait-field" style="display:{% if site.javascript %}block{% else %}none{% endif %}">
             <div class="field">
-              <label>JS wait seconds</label>
+              <label>Browser wait time (seconds)</label>
               <input type="number" name="js_wait_seconds" min="1" max="30"
                      value="{{ site.js_wait_seconds or 5 }}">
-              <div class="hint">Seconds to wait for page JS to finish rendering.</div>
+              <div class="hint">
+                How long to wait after the page loads before reading its content.
+                Increase for slow-loading pages (e.g. 10s for LSE, GCF). 5s is fine for most.
+              </div>
             </div>
           </div>
         </div>
@@ -1402,8 +1458,13 @@ SITE_FORM_TEMPLATE = """
             <div class="toggle-group">
               <input type="checkbox" id="ssl-toggle" name="ssl_verify" value="false"
                      {% if site.ssl_verify == False %}checked{% endif %}>
-              <label for="ssl-toggle">Disable SSL certificate verification
-                (only for sites with self-signed certs)</label>
+              <label for="ssl-toggle">Skip SSL certificate verification</label>
+            </div>
+            <div class="hint" style="margin-top:8px">
+              Enable only for sites with known certificate issues (e.g. eic.mn, energy.gov.mn).
+              The site will still be fetched — this just stops the monitor from refusing to
+              connect due to an expired or self-signed certificate.<br>
+              Currently enabled on: EIC, Mongolia Energy Ministry.
             </div>
           </div>
         </div>
