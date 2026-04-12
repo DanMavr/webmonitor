@@ -123,6 +123,9 @@ TEMPLATE = """
       <button class="btn-check" id="checkBtn" onclick="runCheckNow()">
         Check All Now
       </button>
+      <span id="checkStatus"
+            style="display:none;font-size:12px;color:#38bdf8;margin-left:14px;
+                   vertical-align:middle"></span>
     </div>
   </div>
 
@@ -316,15 +319,35 @@ TEMPLATE = """
 
   <script>
     function runCheckNow() {
-      const btn = document.getElementById("checkBtn");
+      const btn    = document.getElementById("checkBtn");
+      const status = document.getElementById("checkStatus");
       btn.disabled = true;
-      btn.textContent = "Checking...";
+      btn.textContent = "Dispatching…";
+      status.style.display = "inline";
+      status.textContent = "";
+
       fetch("/check-now", { method: "POST" })
         .then(res => res.json())
-        .then(() => { window.location.reload(); })
+        .then(data => {
+          const n = data.dispatched ? data.dispatched.length : "?";
+          btn.textContent  = "Checks running…";
+          status.textContent = n + " sites queued. Page refreshes in 30s.";
+
+          // Count down and reload — checks run in background, timestamps will update
+          let secs = 30;
+          const tick = setInterval(() => {
+            secs--;
+            status.textContent = n + " sites queued. Page refreshes in " + secs + "s.";
+            if (secs <= 0) {
+              clearInterval(tick);
+              window.location.reload();
+            }
+          }, 1000);
+        })
         .catch(() => {
           btn.disabled = false;
           btn.textContent = "Check All Now";
+          status.style.display = "none";
           alert("Request failed — check service logs.");
         });
     }
@@ -497,18 +520,28 @@ def index():
 
 @app.route("/check-now", methods=["POST"])
 def check_now():
+    """
+    Dispatch an immediate check for every site via the running APScheduler.
+    Returns immediately (202) — checks run in the background on the scheduler's
+    event loop, same as normal scheduled runs. Job_log and snapshots update as
+    each site finishes. The dashboard auto-reloads to show fresh timestamps.
+    """
     config_sites = load_config()
+    dispatched = []
+    failed = []
 
-    async def run_all():
-        from monitor.core import check_site
-        for site in config_sites:
-            await check_site(site, force=True)
+    for site in config_sites:
+        try:
+            _trigger_immediate_check(site)
+            dispatched.append(site["name"])
+        except Exception as e:
+            failed.append({"name": site["name"], "error": str(e)})
 
-    try:
-        asyncio.run(run_all())
-        return jsonify({"status": "ok", "checked": len(config_sites)})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    return jsonify({
+        "status": "dispatched",
+        "dispatched": dispatched,
+        "failed": failed,
+    }), 202
 
 
 @app.route("/inspect/<path:site_name>")
