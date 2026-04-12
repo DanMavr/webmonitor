@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 app = Flask(__name__, template_folder="../dashboard/templates")
 app.secret_key = "webmonitor-secret-key-change-me"
-DB = "data/monitor.db"
+from monitor.storage import DB  # single source of truth for DB path
 CONFIG = "config/sites.yaml"
 DISPLAY_TZ = ZoneInfo("Europe/Prague")
 
@@ -243,25 +243,7 @@ def api_json_fields():
     except Exception as e:
         return jsonify({"error": f"Request failed: {e}"})
 
-    # Flatten nested structures
-    def flatten(obj, prefix=""):
-        items = {}
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                full_key = f"{prefix}.{k}" if prefix else k
-                if isinstance(v, (dict, list)):
-                    items.update(flatten(v, full_key))
-                else:
-                    items[full_key] = v
-        elif isinstance(obj, list):
-            for i, v in enumerate(obj[:5]):   # cap list expansion at 5 items
-                full_key = f"{prefix}[{i}]"
-                if isinstance(v, (dict, list)):
-                    items.update(flatten(v, full_key))
-                else:
-                    items[full_key] = v
-        return items
-
+    from monitor.storage import flatten
     flat = flatten(data)
     fields = [{"key": k, "value": str(v)} for k, v in sorted(flat.items())]
 
