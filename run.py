@@ -97,78 +97,6 @@ def _get_effective_interval(site: dict) -> int:
 
     return site.get("interval_minutes", 60)
 
-
-# ── Watchdog ──────────────────────────────────────────────────────────────────
-
-async def watchdog_check(sites: list):
-    """
-    Runs every hour. Alerts via Telegram if any site has not been checked
-    within 3× its expected interval.
-    """
-    import sqlite3
-    from monitor.scheduler import is_in_window
-
-    token   = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-
-    with sqlite3.connect("data/monitor.db") as conn:
-        conn.row_factory = sqlite3.Row
-
-        for site in sites:
-            name          = site["name"]
-            schedule_type = site.get("schedule_type", "interval")
-
-            # Don't alert for time-window sites that are outside their window
-            if schedule_type == "time_window":
-                in_window, _ = is_in_window(site)
-                if not in_window:
-                    continue
-
-            expected_interval = _get_effective_interval(site)
-            max_silence       = expected_interval * 3
-
-            row = conn.execute(
-                """
-                SELECT timestamp FROM job_log
-                WHERE site_name = ?
-                ORDER BY timestamp DESC
-                LIMIT 1
-                """,
-                (name,)
-            ).fetchone()
-
-            if row is None:
-                continue   # site hasn't run yet — not a watchdog concern
-
-            # Parse stored UTC timestamp and keep it timezone-aware
-            last_time = datetime.strptime(
-                row["timestamp"][:19], "%Y-%m-%d %H:%M:%S"
-            ).replace(tzinfo=timezone.utc)
-
-            silence_minutes = (
-                datetime.now(timezone.utc) - last_time
-            ).total_seconds() / 60
-
-            if silence_minutes > max_silence:
-                msg = (
-                    f"WATCHDOG ALERT\n\n"
-                    f"Site: {name}\n"
-                    f"Silent for: {int(silence_minutes)} minutes\n"
-                    f"Expected every: {expected_interval} minutes\n\n"
-                    f"The monitor may have stopped working for this site."
-                )
-                console.log(f"[red]WATCHDOG: {name} silent {int(silence_minutes)}min[/red]")
-                logger.warning(f"Watchdog: {name} silent {int(silence_minutes)}min")
-
-                if token and chat_id:
-                    import telegram
-                    bot = telegram.Bot(token=token)
-                    try:
-                        await bot.send_message(chat_id=chat_id, text=msg)
-                    except Exception as e:
-                        logger.error(f"Watchdog Telegram alert failed: {e}")
-
-
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 
@@ -194,7 +122,7 @@ async def config_watcher():
     current_names   = {s["name"] for s in current_sites}
     scheduled_names = {
         j.id for j in _scheduler.get_jobs()
-        if j.id not in ("watchdog", "config_watcher")
+        if j.id != "config_watcher"
         and not j.id.startswith("__immediate_")
     }
 
@@ -296,18 +224,6 @@ async def cmd_start():
             max_instances=1,
             coalesce=True
         )
-
-    # Watchdog — alerts if a site goes unchecked for 3× its interval
-    _scheduler.add_job(
-        watchdog_check,
-        "interval",
-        hours=1,
-        args=[sites],
-        id="watchdog",
-        next_run_time=datetime.now(timezone.utc),
-        max_instances=1,
-        coalesce=True
-    )
 
     # Config watcher — syncs jobs with sites.yaml every 30 seconds
     _scheduler.add_job(
