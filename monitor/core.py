@@ -112,6 +112,7 @@ def fetch_page_js(url: str, site: dict) -> str:
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--ignore-certificate-errors")
 
     service = Service(executable_path=CHROMEDRIVER_BIN)
 
@@ -404,53 +405,58 @@ async def check_site(site: dict, force: bool = False):
     name = site["name"]
     schedule_type = site.get("schedule_type", "interval")
 
-    # Honour time window unless forced (e.g. manual check from dashboard)
-    if schedule_type == "time_window" and not force:
-        in_window, reason = is_in_window(site)
-        if not in_window:
-            logger.info(f"Outside window: {name} — {reason}")
-            return
+    try:
+        # Honour time window unless forced (e.g. manual check from dashboard)
+        if schedule_type == "time_window" and not force:
+            in_window, reason = is_in_window(site)
+            if not in_window:
+                logger.info(f"Outside window: {name} — {reason}")
+                return
 
-    # Discover URLs to check
-    urls = await crawler.get_pages_to_monitor(site)
+        # Discover URLs to check
+        urls = await crawler.get_pages_to_monitor(site)
 
-    changes  = []
-    errors   = []
-    successes = []
+        changes  = []
+        errors   = []
+        successes = []
 
-    # Route to the appropriate checker based on mode
-    mode = site.get("mode", "single_page")
+        # Route to the appropriate checker based on mode
+        mode = site.get("mode", "single_page")
 
-    for url in urls:
-        if mode == "json_api":
-            result = await check_json_api_url(url, site)
+        for url in urls:
+            if mode == "json_api":
+                result = await check_json_api_url(url, site)
+            else:
+                result = await check_single_url(url, site)
+            if result is None:
+                successes.append(url)
+            elif result.get("error"):
+                errors.append(result)
+            else:
+                changes.append(result)
+                successes.append(url)
+
+        # Send notifications for any changes
+        if changes:
+            await send_notifications(site, changes)
+
+        # Log job outcome
+        total = len(urls)
+        if successes or changes:
+            log_job(
+                name, "success",
+                f"Checked {total} URLs, {len(changes)} changes, "
+                f"{len(errors)} errors"
+            )
+        elif errors:
+            error_msgs = "; ".join(e.get("message", "unknown") for e in errors)
+            log_job(
+                name, "error",
+                f"All {len(errors)} URLs failed: {error_msgs}"
+            )
         else:
-            result = await check_single_url(url, site)
-        if result is None:
-            successes.append(url)
-        elif result.get("error"):
-            errors.append(result)
-        else:
-            changes.append(result)
-            successes.append(url)
+            log_job(name, "success", f"Checked {total} URLs")
 
-    # Send notifications for any changes
-    if changes:
-        await send_notifications(site, changes)
-
-    # Log job outcome
-    total = len(urls)
-    if successes or changes:
-        log_job(
-            name, "success",
-            f"Checked {total} URLs, {len(changes)} changes, "
-            f"{len(errors)} errors"
-        )
-    elif errors:
-        error_msgs = "; ".join(e.get("message", "unknown") for e in errors)
-        log_job(
-            name, "error",
-            f"All {len(errors)} URLs failed: {error_msgs}"
-        )
-    else:
-        log_job(name, "success", f"Checked {total} URLs")
+    except Exception as exc:
+        logger.error(f"Unhandled exception in check_site({name}): {exc}", exc_info=True)
+        log_job(name, "error", f"Unhandled exception: {exc}")
