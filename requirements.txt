@@ -1,32 +1,13 @@
-# Core
-Pillow>=10.0.0
-
-# OCR — works on 32-bit ARM (replaces easyocr / PyTorch)
-pytesseract>=0.3.13
-# System dependency — install once:
-#   sudo apt install tesseract-ocr
-#   sudo apt install tesseract-ocr-rus   # only if monitoring Russian pages
-
-# Screenshots
-playwright>=1.40.0
-# playwright install chromium is NOT needed on 32-bit ARM.
-# Use system Chromium instead:
-#   sudo apt install chromium-browser
-# And set in .env:
-#   USE_SYSTEM_CHROMIUM=1
-
-# Scheduling
 APScheduler>=3.10.0
-
-# Web dashboard
 flask>=3.0.0
-
-# Telegram notifications
 python-telegram-bot>=20.0
-
-# HTTP (JSON API sites e.g. LSE RNS
-aiohttp>=3.9.0
-
-# Config & env
+Pillow>=10.0.0
 python-dotenv>=1.0.0
 PyYAML>=6.0
+selenium>=4.0.0
+pytesseract>=0.3.13
+aiohttp>=3.9.0
+
+# System packages (install once with apt):
+#   sudo apt install chromium-browser chromium-driver
+#   sudo apt install tesseract-ocr
