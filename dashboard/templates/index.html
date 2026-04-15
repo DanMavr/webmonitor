@@ -5,341 +5,196 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0 }
-    body {
-      background: #0f172a; color: #e2e8f0;
-      font-family: system-ui, sans-serif; padding: 24px;
-    }
-    h1 { font-size: 22px; font-weight: 700;
-         margin-bottom: 24px; color: #f8fafc }
-    h1 span { color: #38bdf8 }
-    h2 { font-size: 16px; margin-bottom: 16px;
-         color: #94a3b8; margin-top: 40px }
-    .grid { display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 16px; margin-bottom: 40px }
-    .card { background: #1e293b; border-radius: 12px;
-            padding: 20px; border: 1px solid #334155 }
-    .card .number { font-size: 36px; font-weight: 700; color: #38bdf8 }
-    .card .label  { font-size: 13px; color: #94a3b8; margin-top: 4px }
-    table { width: 100%; border-collapse: collapse;
-            background: #1e293b; border-radius: 12px;
-            overflow: hidden; margin-bottom: 16px }
-    thead tr { background: #0f172a }
-    th { text-align: left; padding: 12px 16px; font-size: 12px;
-         color: #64748b; text-transform: uppercase;
-         letter-spacing: .05em }
-    td { padding: 12px 16px; font-size: 14px;
-         border-top: 1px solid #334155; color: #cbd5e1 }
-    .badge { display: inline-block; padding: 2px 10px;
-             border-radius: 999px; font-size: 12px;
-             font-weight: 600 }
-    .low    { background: #422006; color: #fbbf24 }
-    .medium { background: #431407; color: #fb923c }
-    .high   { background: #450a0a; color: #f87171 }
-    .ok     { background: #052e16; color: #22c55e }
-    .error  { background: #450a0a; color: #f87171 }
-    .site   { color: #f1f5f9; font-weight: 500 }
-    .url    { color: #38bdf8; font-size: 12px }
-    .empty  { text-align: center; padding: 60px; color: #475569 }
-    .schedule { color: #94a3b8; font-size: 12px; margin-top: 2px }
-    .header-row { display: flex; align-items: center;
-                  justify-content: space-between; margin-bottom: 24px }
-    .btn-check {
-      background: #0ea5e9; color: #fff; border: none;
-      padding: 10px 20px; border-radius: 8px; font-size: 14px;
-      font-weight: 600; cursor: pointer; text-decoration: none;
-      display: inline-block;
-    }
-    .btn-check:hover { background: #38bdf8 }
-    .btn-check:disabled { background: #334155; color: #64748b;
-                          cursor: not-allowed }
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; padding: 0 }
+    header { background: #1e293b; border-bottom: 1px solid #334155; padding: 16px 28px;
+             display: flex; align-items: center; justify-content: space-between }
+    header h1 { font-size: 18px; font-weight: 700; color: #f8fafc }
+    header .actions { display: flex; gap: 10px }
+    .btn { padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600;
+           cursor: pointer; border: none; text-decoration: none; display: inline-block }
+    .btn-blue  { background: #0ea5e9; color: #fff }
+    .btn-blue:hover { background: #38bdf8 }
+    .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #334155 }
+    .btn-ghost:hover { color: #e2e8f0; border-color: #64748b }
+    .btn-danger { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; font-size: 12px; padding: 5px 12px }
+    .btn-danger:hover { background: #991b1b }
+    .btn-sm { font-size: 12px; padding: 5px 12px }
 
-    /* Diff expand/collapse */
-    .diff-toggle {
-      background: none; border: none; color: #38bdf8;
-      font-size: 12px; cursor: pointer; padding: 0;
-      margin-top: 4px; display: block;
-    }
-    .diff-toggle:hover { color: #7dd3fc }
-    .diff-box {
-      display: none; margin-top: 8px; background: #0f172a;
-      border-radius: 6px; padding: 10px 12px;
-      font-family: monospace; font-size: 12px;
-      border: 1px solid #334155; white-space: pre-wrap;
-      max-height: 300px; overflow-y: auto;
-    }
-    .diff-box .added   { color: #22c55e }
-    .diff-box .removed { color: #f87171 }
-    .diff-box .meta    { color: #64748b }
+    .main { padding: 24px 28px }
+    .stats-row { display: flex; gap: 16px; margin-bottom: 28px; flex-wrap: wrap }
+    .stat { background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+            padding: 14px 20px; min-width: 120px }
+    .stat .num  { font-size: 26px; font-weight: 700; color: #f8fafc }
+    .stat .lbl  { font-size: 11px; color: #64748b; margin-top: 2px; text-transform: uppercase; letter-spacing: .05em }
 
-    /* Show more */
-    .show-more-row td { text-align: center; padding: 12px }
-    .btn-show-more {
-      background: none; border: 1px solid #334155;
-      color: #94a3b8; padding: 6px 18px; border-radius: 6px;
-      font-size: 13px; cursor: pointer;
-    }
-    .btn-show-more:hover { border-color: #38bdf8; color: #38bdf8 }
-    .hidden-row { display: none }
+    h2 { font-size: 14px; font-weight: 700; color: #94a3b8; text-transform: uppercase;
+         letter-spacing: .06em; margin-bottom: 14px }
 
-    .tz-note { font-size: 11px; color: #475569; margin-top: 4px }
+    table { width: 100%; border-collapse: collapse; font-size: 13px }
+    th { text-align: left; padding: 10px 12px; color: #64748b; font-size: 11px;
+         text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid #334155 }
+    td { padding: 12px 12px; border-bottom: 1px solid #1e293b; vertical-align: middle }
+    tr:hover td { background: #1e293b }
+
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600 }
+    .badge-ok      { background: #14532d; color: #86efac }
+    .badge-error   { background: #450a0a; color: #f87171 }
+    .badge-pending { background: #1e3a5f; color: #7dd3fc }
+
+    .site-url { color: #64748b; font-size: 11px; max-width: 280px;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 0; overflow: hidden }
+    .card-header { padding: 14px 20px; border-bottom: 1px solid #334155; font-size: 13px; font-weight: 600 }
+
+    /* Change feed */
+    .change-list { list-style: none }
+    .change-item { padding: 14px 20px; border-bottom: 1px solid #334155 }
+    .change-item:last-child { border-bottom: none }
+    .change-meta { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px }
+    .change-site { font-weight: 600; color: #f8fafc; font-size: 13px }
+    .change-time { font-size: 11px; color: #64748b }
+    .change-lines { font-size: 12px; font-family: monospace }
+    .line-added   { color: #86efac }
+    .line-removed { color: #f87171 }
+    .change-summary { font-size: 11px; color: #38bdf8; margin-top: 4px }
+
+    .no-changes { padding: 28px; text-align: center; color: #475569; font-size: 13px }
+
+    .flash { background: #14532d; color: #86efac; padding: 10px 16px; border-radius: 8px;
+             margin-bottom: 16px; font-size: 13px }
+
+    /* Baseline image preview */
+    .preview-thumb { width: 48px; height: 36px; object-fit: cover; border-radius: 4px;
+                     border: 1px solid #334155; cursor: pointer }
+
+    .two-col { display: grid; grid-template-columns: 1fr 380px; gap: 24px; align-items: start }
+    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr } }
   </style>
 </head>
 <body>
-
-  <div class="header-row">
-    <div>
-      <h1>Web<span>Monitor</span></h1>
-      <div class="tz-note">All times shown in Prague time (CEST)</div>
+  <header>
+    <h1>🔍 WebMonitor</h1>
+    <div class="actions">
+      <a href="/logs" class="btn btn-ghost">Logs</a>
+      <button class="btn btn-ghost" onclick="checkNow()">Check Now</button>
+      <a href="/site/add" class="btn btn-blue">+ Add Site</a>
     </div>
-    <div style="display:flex;gap:10px;align-items:center">
-      <a href="/logs" style="color:#94a3b8;font-size:13px;text-decoration:none;padding:10px 16px;border:1px solid #334155;border-radius:8px">View Logs</a>
-      <button class="btn-check" id="checkBtn" onclick="runCheckNow()">
-        Check All Now
-      </button>
-      <span id="checkStatus"
-            style="display:none;font-size:12px;color:#38bdf8;margin-left:14px;
-                   vertical-align:middle"></span>
-    </div>
-  </div>
+  </header>
 
-  <!-- Stats Row -->
-  <div class="grid">
-    <div class="card">
-      <div class="number">{{ stats.total_sites }}</div>
-      <div class="label">Sites monitored</div>
-    </div>
-    <div class="card">
-      <div class="number">{{ stats.total_pages }}</div>
-      <div class="label">Pages monitored</div>
-    </div>
-    <div class="card">
-      <div class="number">{{ stats.total_changes }}</div>
-      <div class="label">Total changes</div>
-    </div>
-    <div class="card">
-      <div class="number">{{ stats.checks_today }}</div>
-      <div class="label">Checks today</div>
-    </div>
-    <div class="card">
-      <div class="number" style="color:#22c55e">
-        {{ stats.success_rate }}%
-      </div>
-      <div class="label">Success rate</div>
-    </div>
-  </div>
-
-  <!-- Monitored Sites Table -->
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-    <h2 style="margin:0">Monitored Sites</h2>
-    <a href="/sites/add" class="btn-check" style="font-size:13px;padding:8px 16px">+ Add Site</a>
-  </div>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      {% for category, message in messages %}
-        <div style="background:{% if category=='error' %}#450a0a{% else %}#052e16{% endif %};
-                    color:{% if category=='error' %}#f87171{% else %}#22c55e{% endif %};
-                    padding:10px 16px;border-radius:8px;margin-bottom:16px;font-size:14px">
-          {{ message }}
-        </div>
-      {% endfor %}
-    {% endif %}
-  {% endwith %}
-  <table>
-    <thead>
-      <tr>
-        <th>Site</th>
-        <th>Mode</th>
-        <th>Schedule</th>
-        <th>Last Check</th>
-        <th>Changes</th>
-        <th>Status</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for site in monitored_sites %}
-      <tr>
-        <td>
-          <div class="site">{{ site.name }}</div>
-          <div class="url">{{ site.url }}</div>
-        </td>
-        <td style="color:#94a3b8;font-size:13px">{{ site.mode }}</td>
-        <td>
-          <div class="schedule">{{ site.schedule }}</div>
-        </td>
-        <td style="font-size:13px">{{ site.last_check }}</td>
-        <td style="font-size:13px">{{ site.total_changes }}</td>
-        <td>
-          {% if site.status == "OK" %}
-            <span class="badge ok">OK</span>
-          {% elif site.status == "Error" %}
-            <span class="badge error">Error</span>
-          {% else %}
-            <span style="font-size:12px;color:#64748b">Pending</span>
-          {% endif %}
-          <br>
-          <a href="/inspect/{{ site.name }}"
-             style="color:#38bdf8;font-size:11px">
-            Inspect
-          </a>
-        </td>
-        <td style="white-space:nowrap">
-          <a href="/sites/edit/{{ site.name }}"
-             style="color:#38bdf8;font-size:12px;margin-right:12px">Edit</a>
-          <form method="POST" action="/sites/delete/{{ site.name }}"
-                style="display:inline"
-                onsubmit="return confirm('Delete {{ site.name }}? This cannot be undone.')">
-            <button type="submit"
-                    style="background:none;border:none;color:#f87171;
-                           font-size:12px;cursor:pointer;padding:0">
-              Delete
-            </button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-
-  <!-- Recent Changes Table -->
-  <h2>Recent Changes</h2>
-
-  {% if changes %}
-  <table>
-    <thead>
-      <tr>
-        <th>Site</th>
-        <th>Page</th>
-        <th>Change</th>
-        <th>When</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for c in changes %}
-      <tr class="{% if loop.index > 10 %}hidden-row extra-row{% endif %}">
-        <td class="site">{{ c.site_name }}</td>
-        <td>
-          <a href="{{ c.url }}" target="_blank"
-             style="color:#38bdf8;font-size:13px">
-            {{ c.short_url }}
-          </a>
-        </td>
-        <td>
-          {% set pct = c.change_pct | float %}
-          {% if pct < 5 %}
-            <span class="badge low">{{ c.change_pct }}% minor</span>
-          {% elif pct < 20 %}
-            <span class="badge medium">{{ c.change_pct }}% moderate</span>
-          {% else %}
-            <span class="badge high">{{ c.change_pct }}% major</span>
-          {% endif %}
-
-          {% if c.added or c.removed %}
-          <button class="diff-toggle" onclick="toggleDiff(this)">
-            ▶ Show what changed
-          </button>
-          <div class="diff-box">
-            {% if c.added %}
-            <div style="margin-bottom:6px;color:#64748b;font-size:11px">
-              ADDED ({{ c.added | length }} line{{ 's' if c.added | length != 1 }})
-            </div>
-            {% for line in c.added[:20] %}
-            <div class="added">+ {{ line }}</div>
-            {% endfor %}
-            {% if c.added | length > 20 %}
-            <div class="meta">... {{ c.added | length - 20 }} more lines</div>
-            {% endif %}
-            {% endif %}
-
-            {% if c.removed %}
-            <div style="margin-top:8px;margin-bottom:6px;
-                        color:#64748b;font-size:11px">
-              REMOVED ({{ c.removed | length }} line{{ 's' if c.removed | length != 1 }})
-            </div>
-            {% for line in c.removed[:20] %}
-            <div class="removed">- {{ line }}</div>
-            {% endfor %}
-            {% if c.removed | length > 20 %}
-            <div class="meta">... {{ c.removed | length - 20 }} more lines</div>
-            {% endif %}
-            {% endif %}
-          </div>
-          {% endif %}
-        </td>
-        <td style="font-size:13px">{{ c.timestamp }}</td>
-      </tr>
-      {% endfor %}
-
-      {% if changes | length > 10 %}
-      <tr class="show-more-row" id="showMoreRow">
-        <td colspan="4">
-          <button class="btn-show-more" onclick="showAll()">
-            Show {{ changes | length - 10 }} more
-          </button>
-        </td>
-      </tr>
+  <div class="main">
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
       {% endif %}
-    </tbody>
-  </table>
-  {% else %}
-  <div class="empty">
-    <p>No changes detected yet.</p>
-    <p style="font-size:13px;margin-top:8px">
-      Waiting for first monitoring cycle...
-    </p>
+    {% endwith %}
+
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat"><div class="num">{{ total_sites }}</div><div class="lbl">Sites monitored</div></div>
+      <div class="stat"><div class="num">{{ total_changes }}</div><div class="lbl">Total changes</div></div>
+    </div>
+
+    <div class="two-col">
+      <!-- Sites table -->
+      <div>
+        <h2>Monitored Sites</h2>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>Site</th>
+                <th>Mode</th>
+                <th>Schedule</th>
+                <th>Region</th>
+                <th>Last Check</th>
+                <th>Changes</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for site in monitored_sites %}
+              <tr>
+                <td>
+                  <div style="font-weight:600;color:#f8fafc">{{ site.name }}</div>
+                  <div class="site-url">{{ site.url }}</div>
+                </td>
+                <td><span style="font-size:12px;color:#94a3b8">{{ site.mode }}</span></td>
+                <td><span style="font-size:12px">{{ site.schedule }}</span></td>
+                <td><span style="font-size:11px;color:#64748b">{{ site.clip }}</span></td>
+                <td style="font-size:12px;color:#94a3b8">{{ site.last_check }}</td>
+                <td style="font-size:13px">{{ site.total_changes }}</td>
+                <td>
+                  {% if site.status == 'OK' %}
+                    <span class="badge badge-ok">OK</span>
+                  {% elif site.status == 'Error' %}
+                    <span class="badge badge-error">Error</span>
+                  {% else %}
+                    <span class="badge badge-pending">Pending</span>
+                  {% endif %}
+                </td>
+                <td>
+                  <div style="display:flex;gap:6px;align-items:center">
+                    {% if site.has_baseline %}
+                    <a href="/baseline/{{ site.name }}" target="_blank">
+                      <img class="preview-thumb" src="/baseline/{{ site.name }}" alt="baseline">
+                    </a>
+                    {% endif %}
+                    <a href="/site/edit/{{ site.name }}" class="btn btn-ghost btn-sm">Edit</a>
+                    <form method="POST" action="/site/delete/{{ site.name }}" style="display:inline"
+                          onsubmit="return confirm('Delete {{ site.name }}?')">
+                      <button type="submit" class="btn btn-danger">Del</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Change feed -->
+      <div>
+        <h2>Recent Changes</h2>
+        <div class="card">
+          {% if changes %}
+            <ul class="change-list">
+            {% for c in changes %}
+              <li class="change-item">
+                <div class="change-meta">
+                  <span class="change-site">{{ c.site_name }}</span>
+                  <span class="change-time">{{ c.timestamp }}</span>
+                </div>
+                <div class="change-lines">
+                  {% for l in c.added[:4] %}
+                    <div class="line-added">+ {{ l }}</div>
+                  {% endfor %}
+                  {% for l in c.removed[:2] %}
+                    <div class="line-removed">- {{ l }}</div>
+                  {% endfor %}
+                </div>
+                <div class="change-summary">{{ c.summary }}</div>
+              </li>
+            {% endfor %}
+            </ul>
+          {% else %}
+            <div class="no-changes">No changes recorded yet</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
   </div>
-  {% endif %}
 
   <script>
-    function runCheckNow() {
-      const btn    = document.getElementById("checkBtn");
-      const status = document.getElementById("checkStatus");
-      btn.disabled = true;
-      btn.textContent = "Dispatching…";
-      status.style.display = "inline";
-      status.textContent = "";
-
-      fetch("/check-now", { method: "POST" })
-        .then(res => res.json())
-        .then(data => {
-          const n = data.dispatched ? data.dispatched.length : "?";
-          btn.textContent  = "Checks running…";
-          status.textContent = n + " sites queued. Page refreshes in 30s.";
-
-          // Count down and reload — checks run in background, timestamps will update
-          let secs = 30;
-          const tick = setInterval(() => {
-            secs--;
-            status.textContent = n + " sites queued. Page refreshes in " + secs + "s.";
-            if (secs <= 0) {
-              clearInterval(tick);
-              window.location.reload();
-            }
-          }, 1000);
-        })
-        .catch(() => {
-          btn.disabled = false;
-          btn.textContent = "Check All Now";
-          status.style.display = "none";
-          alert("Request failed — check service logs.");
-        });
-    }
-
-    function toggleDiff(btn) {
-      const box = btn.nextElementSibling;
-      const open = box.style.display === "block";
-      box.style.display = open ? "none" : "block";
-      btn.textContent = open ? "▶ Show what changed" : "▼ Hide";
-    }
-
-    function showAll() {
-      document.querySelectorAll(".extra-row").forEach(r => {
-        r.style.display = "";
-      });
-      document.getElementById("showMoreRow").style.display = "none";
-    }
+  async function checkNow() {
+    const btn = document.querySelector("button[onclick='checkNow()']");
+    btn.textContent = "Dispatching…";
+    btn.disabled = true;
+    await fetch("/check-now", { method: "POST" });
+    setTimeout(() => location.reload(), 1500);
+  }
   </script>
-
 </body>
 </html>
