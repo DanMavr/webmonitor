@@ -24,7 +24,7 @@ flask>=3.0.0
 # Telegram notifications
 python-telegram-bot>=20.0
 
-# HTTP (JSON API sites e.g. LSE RNS)
+# HTTP (JSON API sites e.g. LSE RNS
 aiohttp>=3.9.0
 
 # Config & env
