@@ -1,167 +1,47 @@
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>WebMonitor — Logs</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <style>
-        * { box-sizing: border-box; margin: 0; padding: 0 }
-        body { background: #0f172a; color: #e2e8f0;
-               font-family: system-ui, sans-serif; padding: 24px }
-        .header-row { display: flex; align-items: center;
-                      justify-content: space-between; margin-bottom: 20px }
-        h1 { font-size: 22px; font-weight: 700; color: #f8fafc }
-        h1 span { color: #38bdf8 }
-        .tz-note { font-size: 11px; color: #475569; margin-top: 4px }
-        .back { color: #38bdf8; font-size: 13px; text-decoration: none }
-        .back:hover { color: #7dd3fc }
-        .controls { display: flex; gap: 8px; flex-wrap: wrap;
-                    margin-bottom: 16px; align-items: center }
-        .filter-btn {
-          border: 1px solid #334155; background: none;
-          color: #94a3b8; padding: 5px 14px; border-radius: 6px;
-          font-size: 12px; cursor: pointer;
-        }
-        .filter-btn:hover, .filter-btn.active {
-          border-color: #38bdf8; color: #38bdf8;
-        }
-        .filter-btn.active { background: #0c2a3e }
-        .search-box {
-          background: #1e293b; border: 1px solid #334155;
-          color: #e2e8f0; padding: 5px 12px; border-radius: 6px;
-          font-size: 12px; width: 220px;
-        }
-        .search-box::placeholder { color: #475569 }
-        .auto-refresh {
-          margin-left: auto; font-size: 12px; color: #475569;
-          display: flex; align-items: center; gap: 6px
-        }
-        .log-wrap {
-          background: #0a0f1e; border: 1px solid #1e293b;
-          border-radius: 10px; overflow: hidden;
-        }
-        .log-line {
-          display: flex; gap: 12px; padding: 5px 14px;
-          border-bottom: 1px solid #0f172a;
-          font-family: monospace; font-size: 12px; line-height: 1.5;
-        }
-        .log-line:hover { background: #111827 }
-        .ts { color: #475569; white-space: nowrap; min-width: 140px }
-        .badge {
-          font-size: 10px; font-weight: 700; padding: 1px 7px;
-          border-radius: 4px; white-space: nowrap;
-          align-self: center; min-width: 72px; text-align: center;
-        }
-        .msg { color: #cbd5e1; word-break: break-word }
-        .badge-INFO     { background:#1e3a5f; color:#60a5fa }
-        .badge-CHECKING { background:#1e3a5f; color:#38bdf8 }
-        .badge-BASELINE { background:#052e16; color:#22c55e }
-        .badge-CHANGE   { background:#3b1f00; color:#f59e0b }
-        .badge-JS       { background:#2d1f00; color:#fbbf24 }
-        .badge-WARNING  { background:#2d1f00; color:#fb923c }
-        .badge-ERROR    { background:#450a0a; color:#f87171 }
-        .badge-WATCHDOG { background:#450a0a; color:#f87171 }
-        .msg-CHANGE     { color: #f59e0b }
-        .msg-ERROR      { color: #f87171 }
-        .msg-WATCHDOG   { color: #f87171 }
-        .msg-BASELINE   { color: #22c55e }
-        .empty  { text-align: center; padding: 60px; color: #475569 }
-        .count  { font-size: 12px; color: #475569; margin-bottom: 10px }
-        .hidden { display: none !important }
-      </style>
-    </head>
-    <body>
-      <div class="header-row">
-        <div>
-          <h1>Web<span>Monitor</span> — Logs</h1>
-          <div class="tz-note">Times shown in Prague time (CEST) &nbsp;·&nbsp;
-            Last {{ lines|length }} entries
-          </div>
-        </div>
-        <a href="/" class="back">← Back to dashboard</a>
-      </div>
-
-      <div class="controls">
-        <button class="filter-btn active" onclick="setFilter('ALL', this)">All</button>
-        <button class="filter-btn" onclick="setFilter('CHANGE', this)">Changes</button>
-        <button class="filter-btn" onclick="setFilter('ERROR', this)">Errors</button>
-        <button class="filter-btn" onclick="setFilter('WATCHDOG', this)">Watchdog</button>
-        <button class="filter-btn" onclick="setFilter('WARNING', this)">Warnings</button>
-        <input class="search-box" type="text" id="searchBox"
-               placeholder="Search logs..." oninput="applyFilters()">
-        <div class="auto-refresh">
-          <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()">
-          <label for="autoRefresh" style="cursor:pointer">Auto-refresh 30s</label>
-        </div>
-      </div>
-
-      <div class="count" id="lineCount">Showing {{ lines|length }} lines</div>
-
-      {% if lines %}
-      <div class="log-wrap" id="logWrap">
-        {% for entry in lines %}
-        <div class="log-line" data-level="{{ entry.level }}">
-          <span class="ts">{{ entry.ts }}</span>
-          <span class="badge badge-{{ entry.level }}">{{ entry.level }}</span>
-          {% if entry.count > 1 %}
-          <span style="background:#1e3a5f;color:#38bdf8;border-radius:10px;
-                       padding:1px 8px;font-size:11px;font-weight:700;
-                       margin-right:6px;white-space:nowrap">
-            ×{{ entry.count }} &nbsp;
-            <span style="color:#475569;font-weight:400;font-size:10px">
-              {{ entry.ts_first }} → {{ entry.ts }}
-            </span>
-          </span>
-          {% endif %}
-          <span class="msg msg-{{ entry.level }}">{{ entry.message }}</span>
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <div class="empty">
-        <p>No activity log yet.</p>
-        <p style="font-size:13px;margin-top:8px">Logs will appear here after the monitor runs.</p>
-      </div>
-      {% endif %}
-
-      <script>
-        let currentFilter = 'ALL';
-        let refreshTimer = null;
-
-        function setFilter(level, btn) {
-          currentFilter = level;
-          document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-          btn.classList.add('active');
-          applyFilters();
-        }
-
-        function applyFilters() {
-          const search = document.getElementById('searchBox').value.toLowerCase();
-          const rows = document.querySelectorAll('.log-line');
-          let visible = 0;
-          rows.forEach(row => {
-            const level = row.dataset.level;
-            const text  = row.textContent.toLowerCase();
-            const levelOk  = currentFilter === 'ALL' || level === currentFilter;
-            const searchOk = !search || text.includes(search);
-            if (levelOk && searchOk) {
-              row.classList.remove('hidden');
-              visible++;
-            } else {
-              row.classList.add('hidden');
-            }
-          });
-          document.getElementById('lineCount').textContent = `Showing ${visible} lines`;
-        }
-
-        function toggleAutoRefresh() {
-          const checked = document.getElementById('autoRefresh').checked;
-          if (checked) {
-            refreshTimer = setInterval(() => location.reload(), 30000);
-          } else {
-            clearInterval(refreshTimer);
-            refreshTimer = null;
-          }
-        }
-      </script>
-    </body>
-    </html>
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebMonitor — Logs</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0 }
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; padding: 32px 24px }
+    a.back { color: #38bdf8; font-size: 13px; text-decoration: none; display: inline-block; margin-bottom: 20px }
+    h1 { font-size: 18px; font-weight: 700; margin-bottom: 20px; color: #f8fafc }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: monospace }
+    th { text-align: left; padding: 8px 12px; color: #64748b; font-size: 11px;
+         border-bottom: 1px solid #334155; font-family: system-ui }
+    td { padding: 6px 12px; border-bottom: 1px solid #1a2535; vertical-align: top }
+    .ts { color: #475569; white-space: nowrap; width: 160px }
+    .msg { color: #cbd5e1 }
+    .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px;
+             font-weight: 700; width: 72px; text-align: center; font-family: system-ui }
+    .CHANGE   { background:#14532d; color:#86efac }
+    .ERROR    { background:#450a0a; color:#f87171 }
+    .WARNING  { background:#422006; color:#fdba74 }
+    .BASELINE { background:#1e3a5f; color:#7dd3fc }
+    .CHECKING { background:#1e293b; color:#94a3b8 }
+    .INFO     { background:#1e293b; color:#64748b }
+    .cnt { color: #64748b; font-size: 11px }
+  </style>
+</head>
+<body>
+  <a href="/" class="back">← Dashboard</a>
+  <h1>Activity Log</h1>
+  <table>
+    <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
+    <tbody>
+    {% for l in lines %}
+      <tr>
+        <td class="ts">{{ l.ts }}</td>
+        <td><span class="badge {{ l.level }}">{{ l.level }}</span></td>
+        <td class="msg">
+          {{ l.message }}
+          {% if l.count > 1 %}<span class="cnt"> ×{{ l.count }}</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
