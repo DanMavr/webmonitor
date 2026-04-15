@@ -1,47 +1,76 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>WebMonitor — Logs</title>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebMonitor — Logs</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0 }
-    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; padding: 32px 24px }
-    a.back { color: #38bdf8; font-size: 13px; text-decoration: none; display: inline-block; margin-bottom: 20px }
-    h1 { font-size: 18px; font-weight: 700; margin-bottom: 20px; color: #f8fafc }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; padding: 28px 24px }
+    a.back { color: #38bdf8; font-size: 13px; text-decoration: none; margin-bottom: 18px; display: inline-block }
+    h1 { font-size: 16px; font-weight: 700; color: #f8fafc; margin-bottom: 18px }
+    .filter-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap }
+    .filter-btn { padding: 4px 12px; border-radius: 6px; font-size: 11px; font-weight: 700;
+                  cursor: pointer; border: 1px solid transparent; background: #1e293b; color: #64748b }
+    .filter-btn.active { border-color: currentColor }
+    .filter-btn.ALL     { color: #94a3b8 }
+    .filter-btn.CHANGE  { color: #86efac }
+    .filter-btn.ERROR   { color: #f87171 }
+    .filter-btn.WARNING { color: #fdba74 }
+    .filter-btn.BASELINE{ color: #7dd3fc }
     table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: monospace }
-    th { text-align: left; padding: 8px 12px; color: #64748b; font-size: 11px;
-         border-bottom: 1px solid #334155; font-family: system-ui }
-    td { padding: 6px 12px; border-bottom: 1px solid #1a2535; vertical-align: top }
-    .ts { color: #475569; white-space: nowrap; width: 160px }
+    th { text-align: left; padding: 8px 12px; color: #64748b; font-size: 10px; font-family: system-ui;
+         text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid #334155 }
+    td { padding: 5px 12px; border-bottom: 1px solid #131e2e; vertical-align: top }
+    .ts  { color: #475569; white-space: nowrap; width: 140px }
     .msg { color: #cbd5e1 }
-    .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px;
-             font-weight: 700; width: 72px; text-align: center; font-family: system-ui }
+    .cnt { color: #475569; font-size: 11px; margin-left: 6px }
+    .badge { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 10px;
+             font-weight: 700; width: 68px; text-align: center; font-family: system-ui }
     .CHANGE   { background:#14532d; color:#86efac }
     .ERROR    { background:#450a0a; color:#f87171 }
     .WARNING  { background:#422006; color:#fdba74 }
     .BASELINE { background:#1e3a5f; color:#7dd3fc }
     .CHECKING { background:#1e293b; color:#94a3b8 }
-    .INFO     { background:#1e293b; color:#64748b }
-    .cnt { color: #64748b; font-size: 11px }
+    .INFO     { background:#1e293b; color:#475569 }
+    tr.hidden { display: none }
   </style>
 </head>
 <body>
   <a href="/" class="back">← Dashboard</a>
   <h1>Activity Log</h1>
+
+  <div class="filter-row">
+    <button class="filter-btn ALL active" onclick="setFilter('ALL', this)">ALL</button>
+    <button class="filter-btn CHANGE"     onclick="setFilter('CHANGE', this)">CHANGE</button>
+    <button class="filter-btn ERROR"      onclick="setFilter('ERROR', this)">ERROR</button>
+    <button class="filter-btn WARNING"    onclick="setFilter('WARNING', this)">WARNING</button>
+    <button class="filter-btn BASELINE"   onclick="setFilter('BASELINE', this)">BASELINE</button>
+  </div>
+
   <table>
     <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
-    <tbody>
+    <tbody id="logBody">
     {% for l in lines %}
-      <tr>
+      <tr data-level="{{ l.level }}">
         <td class="ts">{{ l.ts }}</td>
         <td><span class="badge {{ l.level }}">{{ l.level }}</span></td>
-        <td class="msg">
-          {{ l.message }}
-          {% if l.count > 1 %}<span class="cnt"> ×{{ l.count }}</span>{% endif %}
-        </td>
+        <td class="msg">{{ l.message }}{% if l.count > 1 %}<span class="cnt">×{{ l.count }}</span>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
+
+  <script>
+  let current = "ALL";
+  function setFilter(level, btn) {
+    current = level;
+    document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelectorAll("#logBody tr").forEach(row => {
+      row.classList.toggle("hidden", level !== "ALL" && row.dataset.level !== level);
+    });
+  }
+  </script>
 </body>
 </html>
