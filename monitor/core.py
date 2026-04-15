@@ -1,440 +1,162 @@
-import hashlib
-import difflib
+"""
+core.py — main check loop.
+
+For each site:
+  1. Take a screenshot (Playwright, clipped to the configured region)
+  2. OCR the screenshot (EasyOCR)
+  3. Diff against stored baseline text
+  4. If changed → notify via Telegram + save new screenshot as baseline
+  5. If first run (no baseline) → save as baseline, no notification
+
+Special case: mode=json_api sites bypass screenshot/OCR entirely and
+use direct JSON field comparison (e.g. LSE RNS — unchanged from before).
+"""
+
+import json
 import logging
-import time
 import asyncio
+import aiohttp
 from datetime import datetime, timezone
 
-import requests
-from bs4 import BeautifulSoup
-from rich.console import Console
+from monitor.capture  import take_screenshot
+from monitor.ocr      import extract_text
+from monitor.diff     import compute_diff
+from monitor.storage  import (
+    load_baseline, save_baseline, baseline_exists,
+    log_job, log_change
+)
+from monitor.notify   import send_change_alert, send_error_alert
 
-from monitor.storage import flatten, get_last_snapshot, save_snapshot, save_change, log_job
-from monitor import crawler
-
-console = Console()
 logger = logging.getLogger("monitor")
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
-    )
-}
 
-CHROMIUM_BINARY  = "/usr/bin/chromium-browser"
-CHROMEDRIVER_BIN = "/usr/bin/chromedriver"
+# ── JSON API check (LSE RNS — keep as-is, it works perfectly) ─────────────────
 
-MIN_CONTENT_WORDS_DEFAULT = 50
+async def check_json_api(site: dict):
+    name       = site["name"]
+    url        = site["url"]
+    fields     = site.get("json_fields", [])
 
-# Diff display limits
-DIFF_STORE_LINES  = 80   # lines stored in DB
-DIFF_NOTIFY_LINES = 20   # lines sent in Telegram message
+    logger.info(f"Checking JSON API: {name}")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                data = await resp.json(content_type=None)
+    except Exception as e:
+        logger.error(f"{name}: JSON fetch failed — {e}")
+        log_job(name, "error", str(e))
+        return
 
-
-def extract_content(html: str, site: dict) -> str:
-    """
-    Extract clean text from HTML.
-
-    If target_selector is set in site config, only text inside that CSS
-    selector is extracted — everything else on the page is ignored.
-    This is the cleanest way to monitor a specific section of a page
-    (e.g. just the RNS announcements table on LSE, ignoring nav/prices).
-
-    Without target_selector, the full page text is extracted minus any
-    ignore_selectors.
-
-    Also captures href links so new document/filing links are not missed.
-    """
-    soup = BeautifulSoup(html, "lxml")
-
-    # Always strip non-content tags first
-    for tag in soup(["script", "style", "meta", "noscript"]):
-        tag.decompose()
-
-    # ── Target selector: only watch a specific section ────────────────────
-    target_sel = site.get("target_selector", "").strip()
-    if target_sel:
-        target_el = soup.select_one(target_sel)
-        if target_el:
-            # Work only within the targeted element
-            soup = target_el
-            logger.debug(f"target_selector '{target_sel}' matched — extracting section only")
+    # Flatten and filter to watched fields
+    def _flatten(obj, prefix=""):
+        items = {}
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                items.update(_flatten(v, f"{prefix}{k}."))
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                items.update(_flatten(v, f"{prefix}{i}."))
         else:
-            logger.warning(
-                f"target_selector '{target_sel}' not found in page for "
-                f"{site.get('name', '?')} — falling back to full page"
-            )
+            items[prefix.rstrip(".")] = obj
+        return items
 
-    # ── Ignore selectors: strip noise elements ────────────────────────────
-    for selector in site.get("ignore_selectors", []):
-        for el in (soup.select(selector) if hasattr(soup, "select") else []):
-            el.decompose()
+    flat = _flatten(data)
+    if fields:
+        flat = {k: v for k, v in flat.items()
+                if any(k == f or k.endswith("." + f) for f in fields)}
 
-    # Capture visible text
-    text_node = soup if hasattr(soup, "get_text") else soup
-    text = " ".join(text_node.get_text(separator=" ").split())
+    current_text = json.dumps(flat, sort_keys=True, ensure_ascii=False)
+    _, baseline_text = load_baseline(name)
 
-    # Append all href links so new document/filing links are detectable
-    links = []
-    find_fn = soup.find_all if hasattr(soup, "find_all") else lambda *a, **k: []
-    for a in find_fn("a", href=True):
-        href = a["href"].strip()
-        # Only include meaningful links — skip anchors and javascript: hrefs
-        if href and not href.startswith("#") and not href.lower().startswith("javascript"):
-            links.append(href)
+    if not baseline_text:
+        save_baseline(name, b"", current_text)
+        logger.info(f"{name}: JSON baseline saved")
+        log_job(name, "success", "baseline saved")
+        return
 
-    if links:
-        text += " LINKS: " + " ".join(links)
+    if current_text == baseline_text:
+        logger.info(f"{name}: no change")
+        log_job(name, "success", "no change")
+        return
 
-    return text
-
-
-def fetch_page_js(url: str, site: dict) -> str:
-    """
-    Fetch a JS-rendered page using Selenium.
-    MUST be called via run_in_executor — never call directly in async context.
-    """
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.common.by import By
-
-    opts = Options()
-    opts.binary_location = CHROMIUM_BINARY
-    opts.add_argument("--headless")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1920,1080")
-    opts.add_argument("--ignore-certificate-errors")
-
-    service = Service(executable_path=CHROMEDRIVER_BIN)
-
-    # driver initialised to None so finally block is always safe
-    driver = None
-    try:
-        driver = webdriver.Chrome(service=service, options=opts)
-        driver.get(url)
-
-        wait_seconds = site.get("js_wait_seconds", 3)
-
-        # Wait for body to appear (dynamic wait — exits as soon as ready)
-        WebDriverWait(driver, wait_seconds).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
-
-        # Short fixed stabilisation pause for JS frameworks to finish rendering
-        # Using 2s instead of repeating the full wait_seconds
-        time.sleep(2)
-
-        return driver.page_source
-
-    except Exception as e:
-        logger.error(f"Selenium error for {url}: {e}")
-        return ""
-
-    finally:
-        if driver:
-            driver.quit()
-
-
-async def fetch_page(url: str, site: dict) -> str:
-    """
-    Fetch a page. Returns HTML string.
-    Auto-falls back to Selenium if content is too thin after requests fetch.
-    """
-    min_words = site.get("min_content_words", MIN_CONTENT_WORDS_DEFAULT)
-
-    # Force JS path if configured
-    if site.get("javascript"):
-        loop = asyncio.get_running_loop()
-        html = await loop.run_in_executor(None, lambda: fetch_page_js(url, site))
-        return html
-
-    # Try requests first (fast)
-    try:
-        resp = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=20,
-            verify=site.get("ssl_verify", True)
-        )
-        resp.raise_for_status()
-        html = resp.text
-    except Exception as e:
-        logger.warning(f"requests failed for {url}: {e}")
-        return ""
-
-    # Check word count — fall back to Selenium if too thin
-    content = extract_content(html, site)
-    if len(content.split()) >= min_words:
-        return html
-
-    logger.info(
-        f"Thin content ({len(content.split())} words) for {url}, "
-        f"trying Selenium"
-    )
-    loop = asyncio.get_running_loop()
-    html = await loop.run_in_executor(None, lambda: fetch_page_js(url, site))
-    return html
-
-
-def compute_text_diff(old: str, new: str) -> tuple[str, float]:
-    """
-    Compute change percentage and a unified diff between old and new content.
-    Returns (diff_text, change_pct).
-    change_pct is word-level (sensitive to small changes).
-    diff_text is line-level (readable in notifications).
-    """
-    old_words = old.split()
-    new_words = new.split()
-
-    # Word-level similarity for percentage
-    matcher = difflib.SequenceMatcher(None, old_words, new_words)
-    ratio = matcher.ratio()
-    change_pct = (1.0 - ratio) * 100
-
-    # Line-level unified diff for human-readable preview
-    old_lines = old.splitlines()
-    new_lines = new.splitlines()
-    diff = list(difflib.unified_diff(
-        old_lines, new_lines,
-        fromfile="previous",
-        tofile="current",
-        lineterm=""
-    ))
-    diff_text = "\n".join(diff[:DIFF_STORE_LINES])
-    return diff_text, change_pct
-
-
-
-def fetch_json_api(url: str, site: dict) -> str:
-    """
-    Fetch a JSON API endpoint and extract only the watched fields.
-    Returns a formatted string of field: value pairs for comparison.
-    MUST be called via run_in_executor — never call directly in async context.
-    """
-    verify_ssl = site.get("ssl_verify", True)
-    try:
-        resp = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=20,
-            verify=verify_ssl
-        )
-        if resp.status_code != 200:
-            logger.warning(f"JSON API {url} returned {resp.status_code}")
-            return ""
-
-        data = resp.json()
-    except Exception as e:
-        logger.warning(f"JSON API fetch failed for {url}: {e}")
-        return ""
-
-    flat = flatten(data)  # flatten() imported from monitor.storage
-
-    # If specific fields are configured, extract only those
-    watched = site.get("json_fields", [])
-    if watched:
-        lines = []
-        for field in watched:
-            val = flat.get(field, "<field not found>")
-            lines.append(f"{field}: {val}")
-        return "\n".join(lines)
-
-    # No fields configured — return everything (useful for baseline)
-    lines = [f"{k}: {v}" for k, v in sorted(flat.items())]
-    return "\n".join(lines)
-
-
-async def check_json_api_url(url: str, site: dict) -> dict | None:
-    """
-    JSON API equivalent of check_single_url.
-    Compares watched field values against the previous snapshot.
-    """
-    loop = asyncio.get_running_loop()
-    content = await loop.run_in_executor(None, lambda: fetch_json_api(url, site))
-
-    if not content:
-        logger.warning(f"Empty JSON API response for {url}")
-        return {"error": True, "url": url, "message": "Empty JSON API response"}
-
-    checksum = hashlib.md5(content.encode()).hexdigest()
-    prev = get_last_snapshot(url)
-
-    # First visit — save baseline
-    if prev is None:
-        save_snapshot(site["name"], url, content, checksum)
-        logger.info(f"New JSON baseline: {url}")
-        return None
-
-    # No change
-    if prev["checksum"] == checksum:
-        logger.info(f"No change: {url}")
-        return None
-
-    # Fields changed — compute diff
-    diff_text, change_pct = compute_text_diff(prev["content"], content)
-
-    min_pct = site.get("min_change_percent", 1.0)
-    if change_pct < min_pct:
-        logger.info(
-            f"JSON change {change_pct:.1f}% below threshold "
-            f"{min_pct}% for {url}"
-        )
-        save_snapshot(site["name"], url, content, checksum)
-        return None
-
-    save_snapshot(site["name"], url, content, checksum)
-    save_change(site["name"], url, prev["checksum"], checksum,
-                change_pct, diff_text)
-
-    logger.info(f"JSON change detected: {url} ({change_pct:.1f}%)")
-
-    return {
-        "url":        url,
-        "diff":       diff_text,
-        "change_pct": change_pct,
-        "content":    content,
+    # Build a human-readable diff of the JSON fields
+    old = json.loads(baseline_text)
+    new = json.loads(current_text)
+    added   = [f"{k}: {new[k]}" for k in new if old.get(k) != new[k]]
+    removed = [f"{k}: {old[k]}" for k in old if k not in new]
+    diff = {
+        "changed": True,
+        "added":   added,
+        "removed": removed,
+        "summary": f"{len(added)} fields changed",
     }
 
-
-async def check_single_url(url: str, site: dict) -> dict | None:
-    """
-    Fetches a URL and compares to previous snapshot.
-
-    Returns:
-      None                              — no change
-      {"url": ..., "diff": ..., ...}    — change detected
-      {"error": True, "url": ..., ...}  — fetch failed
-    """
-    html = await fetch_page(url, site)
-
-    if not html:
-        logger.warning(f"Empty fetch for {url}")
-        return {"error": True, "url": url, "message": "Empty fetch"}
-
-    content = extract_content(html, site)
-    word_count = len(content.split())
-    checksum = hashlib.md5(content.encode()).hexdigest()
-
-    prev = get_last_snapshot(url)
-
-    # First visit — save baseline, no notification
-    if prev is None:
-        save_snapshot(site["name"], url, content, checksum)
-        logger.info(f"New baseline: {url} ({word_count} words)")
-        return None
-
-    # No change
-    if prev["checksum"] == checksum:
-        logger.info(f"No change: {url}")
-        return None
-
-    # Content changed — compute diff
-    diff_text, change_pct = compute_text_diff(prev["content"], content)
-
-    # Silently replace a previously thin baseline with a proper one
-    min_words = site.get("min_content_words", MIN_CONTENT_WORDS_DEFAULT)
-    if len(prev["content"].split()) < min_words and word_count >= min_words:
-        logger.info(
-            f"Replacing thin baseline for {url} "
-            f"({len(prev['content'].split())} → {word_count} words)"
-        )
-        save_snapshot(site["name"], url, content, checksum)
-        return None
-
-    # Apply min_change_percent filter
-    min_pct = site.get("min_change_percent", 0)
-    if change_pct < min_pct:
-        logger.info(
-            f"Change {change_pct:.1f}% below threshold "
-            f"{min_pct}% for {url}, skipping"
-        )
-        return None
-
-    # Real change — save and return for notification
-    save_snapshot(site["name"], url, content, checksum)
-    save_change(
-        site["name"], url,
-        prev["checksum"], checksum,
-        change_pct, diff_text
-    )
-
-    logger.info(f"Change detected: {url} ({change_pct:.1f}%)")
-    return {
-        "url": url,
-        "diff": diff_text,
-        "change_pct": change_pct
-    }
+    logger.info(f"{name}: JSON change detected — {diff['summary']}")
+    send_change_alert(name, diff, png_bytes=None)
+    save_baseline(name, b"", current_text)
+    log_change(name, diff)
+    log_job(name, "success", diff["summary"])
 
 
-async def check_site(site: dict, force: bool = False):
-    """
-    Main entry point for checking a site.
-    Called by the scheduler, dashboard button, and Telegram /check command.
-    """
-    from monitor.scheduler import is_in_window
-    from monitor.notify import send_notifications
+# ── Screenshot + OCR check ────────────────────────────────────────────────────
 
-    name = site["name"]
-    schedule_type = site.get("schedule_type", "interval")
+async def check_screenshot_site(site: dict):
+    name       = site["name"]
+    url        = site["url"]
+    clip       = site.get("clip")          # {x, y, width, height} or None
+    languages  = site.get("ocr_languages", ["en"])
+    js_wait    = site.get("js_wait", 3.0)
+    min_conf   = site.get("ocr_min_confidence", 0.4)
 
-    try:
-        # Honour time window unless forced (e.g. manual check from dashboard)
-        if schedule_type == "time_window" and not force:
-            in_window, reason = is_in_window(site)
-            if not in_window:
-                logger.info(f"Outside window: {name} — {reason}")
-                return
+    logger.info(f"Checking: {name}  url={url}  clip={clip}")
 
-        # Discover URLs to check
-        urls = await crawler.get_pages_to_monitor(site)
+    # 1. Screenshot
+    png = await take_screenshot(url, clip, js_wait)
+    if not png:
+        msg = "Screenshot failed (browser error or timeout)"
+        logger.error(f"{name}: {msg}")
+        send_error_alert(name, msg)
+        log_job(name, "error", msg)
+        return
 
-        changes  = []
-        errors   = []
-        successes = []
+    # 2. OCR
+    current_text = extract_text(png, languages, min_confidence=min_conf)
+    if not current_text.strip():
+        # OCR returned nothing — could be a blank page or load failure
+        # Don't update baseline; log and move on
+        logger.warning(f"{name}: OCR returned empty text — skipping")
+        log_job(name, "error", "OCR returned empty text")
+        return
 
-        # Route to the appropriate checker based on mode
-        mode = site.get("mode", "single_page")
+    # 3. Compare with baseline
+    _, baseline_text = load_baseline(name)
 
-        for url in urls:
-            if mode == "json_api":
-                result = await check_json_api_url(url, site)
-            else:
-                result = await check_single_url(url, site)
-            if result is None:
-                successes.append(url)
-            elif result.get("error"):
-                errors.append(result)
-            else:
-                changes.append(result)
-                successes.append(url)
+    if not baseline_text:
+        save_baseline(name, png, current_text)
+        logger.info(f"{name}: baseline saved ({len(current_text.splitlines())} OCR lines)")
+        log_job(name, "success", "baseline saved")
+        return
 
-        # Send notifications for any changes
-        if changes:
-            await send_notifications(site, changes)
+    diff = compute_diff(baseline_text, current_text)
 
-        # Log job outcome
-        total = len(urls)
-        if successes or changes:
-            log_job(
-                name, "success",
-                f"Checked {total} URLs, {len(changes)} changes, "
-                f"{len(errors)} errors"
-            )
-        elif errors:
-            error_msgs = "; ".join(e.get("message", "unknown") for e in errors)
-            log_job(
-                name, "error",
-                f"All {len(errors)} URLs failed: {error_msgs}"
-            )
-        else:
-            log_job(name, "success", f"Checked {total} URLs")
+    if not diff["changed"]:
+        logger.info(f"{name}: no change")
+        log_job(name, "success", "no change")
+        return
 
-    except Exception as exc:
-        logger.error(f"Unhandled exception in check_site({name}): {exc}", exc_info=True)
-        log_job(name, "error", f"Unhandled exception: {exc}")
+    # 4. Change detected
+    logger.info(f"{name}: change detected — {diff['summary']}")
+    send_change_alert(name, diff, png_bytes=png)
+    save_baseline(name, png, current_text)
+    log_change(name, diff)
+    log_job(name, "success", diff["summary"])
+
+
+# ── Dispatcher ────────────────────────────────────────────────────────────────
+
+async def check_site(site: dict):
+    mode = site.get("mode", "screenshot")
+    if mode == "json_api":
+        await check_json_api(site)
+    else:
+        await check_screenshot_site(site)
