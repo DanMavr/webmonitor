@@ -68,23 +68,33 @@ def cmd_check():
     print("One-shot check complete.")
 
 
-def cmd_start():
-    from monitor.storage  import init_db
+async def _start_async(sites):
+    """Start the scheduler inside the running event loop, then keep loop alive."""
     from monitor.scheduler import build_scheduler
-    from dashboard.app    import start_dashboard, set_scheduler
+    from dashboard.app import set_scheduler
+
+    scheduler = build_scheduler(sites)
+    set_scheduler(scheduler)
+    scheduler.start()  # called inside running loop — correct for AsyncIOScheduler
+
+    # Keep the async loop alive
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        scheduler.shutdown()
+
+
+def cmd_start():
+    from monitor.storage import init_db
+    from dashboard.app import start_dashboard
 
     init_db()
     sites = load_sites()
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    scheduler = build_scheduler(sites)
-    set_scheduler(scheduler)
-
-    scheduler.start()
-
-    # Run dashboard in a background thread
+    # Run Flask dashboard in a background daemon thread
     dash_thread = threading.Thread(
         target=start_dashboard,
         kwargs={"host": "0.0.0.0", "port": 5000, "debug": False},
@@ -95,9 +105,8 @@ def cmd_start():
     print("Monitoring started. Press Ctrl+C to stop.")
 
     try:
-        loop.run_forever()
-    except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
+        asyncio.run(_start_async(sites))
+    except KeyboardInterrupt:
         print("Stopped.")
 
 
