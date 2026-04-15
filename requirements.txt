@@ -1,12 +1,33 @@
-requests
-beautifulsoup4
-apscheduler
-python-telegram-bot==20.7
-pyyaml
-python-dotenv
-lxml
-Pillow
-flask
-rich
-numpy
-sqlalchemy
+# Core
+playwright>=1.40.0
+easyocr>=1.7.0
+Pillow>=10.0.0
+
+# Scheduling
+APScheduler>=3.10.0
+
+# Web dashboard
+flask>=3.0.0
+
+# Telegram notifications
+python-telegram-bot>=20.0
+
+# HTTP (JSON API sites e.g. LSE RNS)
+aiohttp>=3.9.0
+
+# Config & env
+python-dotenv>=1.0.0
+PyYAML>=6.0
+
+# ─── Install notes ────────────────────────────────────────────────────────────
+# After pip install -r requirements.txt, run once:
+#   playwright install chromium          # downloads ARM64 Chromium on Raspberry Pi
+#   playwright install-deps chromium     # installs system deps (run as sudo if needed)
+#
+# EasyOCR downloads ~500MB of neural net models on first use.
+# They are cached in ~/.EasyOCR/ and never downloaded again.
+#
+# If Playwright's bundled Chromium fails on your Raspberry Pi, add to .env:
+#   USE_SYSTEM_CHROMIUM=1
+# Then install system Chromium:
+#   sudo apt install chromium-browser
