@@ -1,200 +1,236 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>WebMonitor</title>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebMonitor</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0 }
-    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; padding: 0 }
-    header { background: #1e293b; border-bottom: 1px solid #334155; padding: 16px 28px;
-             display: flex; align-items: center; justify-content: space-between }
-    header h1 { font-size: 18px; font-weight: 700; color: #f8fafc }
-    header .actions { display: flex; gap: 10px }
-    .btn { padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600;
-           cursor: pointer; border: none; text-decoration: none; display: inline-block }
-    .btn-blue  { background: #0ea5e9; color: #fff }
-    .btn-blue:hover { background: #38bdf8 }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif }
+
+    /* Header */
+    header { background: #1e293b; border-bottom: 1px solid #334155;
+             padding: 14px 28px; display: flex; align-items: center; justify-content: space-between }
+    header h1 { font-size: 17px; font-weight: 700; color: #f8fafc; letter-spacing: -.01em }
+    .actions { display: flex; gap: 8px; align-items: center }
+
+    /* Buttons */
+    .btn { padding: 7px 16px; border-radius: 7px; font-size: 13px; font-weight: 600;
+           cursor: pointer; border: none; text-decoration: none; display: inline-flex;
+           align-items: center; gap: 5px; transition: background .15s }
+    .btn-primary { background: #0ea5e9; color: #fff }
+    .btn-primary:hover { background: #38bdf8 }
     .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #334155 }
-    .btn-ghost:hover { color: #e2e8f0; border-color: #64748b }
-    .btn-danger { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; font-size: 12px; padding: 5px 12px }
+    .btn-ghost:hover { color: #f1f5f9; border-color: #64748b }
+    .btn-danger { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; font-size: 12px; padding: 5px 10px }
     .btn-danger:hover { background: #991b1b }
-    .btn-sm { font-size: 12px; padding: 5px 12px }
+    .btn-sm { font-size: 12px; padding: 5px 10px }
+    .btn-warn { background: #78350f; color: #fde68a; border: 1px solid #92400e; font-size: 11px; padding: 4px 9px }
+    .btn-warn:hover { background: #92400e }
 
-    .main { padding: 24px 28px }
-    .stats-row { display: flex; gap: 16px; margin-bottom: 28px; flex-wrap: wrap }
+    /* Main layout */
+    .main { padding: 22px 28px }
+    .stats-row { display: flex; gap: 14px; margin-bottom: 24px; flex-wrap: wrap }
     .stat { background: #1e293b; border: 1px solid #334155; border-radius: 10px;
-            padding: 14px 20px; min-width: 120px }
-    .stat .num  { font-size: 26px; font-weight: 700; color: #f8fafc }
-    .stat .lbl  { font-size: 11px; color: #64748b; margin-top: 2px; text-transform: uppercase; letter-spacing: .05em }
+            padding: 12px 20px; min-width: 110px }
+    .stat .num { font-size: 28px; font-weight: 700; color: #f8fafc; line-height: 1 }
+    .stat .lbl { font-size: 10px; color: #64748b; margin-top: 4px;
+                 text-transform: uppercase; letter-spacing: .06em }
 
-    h2 { font-size: 14px; font-weight: 700; color: #94a3b8; text-transform: uppercase;
-         letter-spacing: .06em; margin-bottom: 14px }
+    .two-col { display: grid; grid-template-columns: 1fr 360px; gap: 22px }
+    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr } }
 
+    h2 { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;
+         letter-spacing: .07em; margin-bottom: 12px }
+
+    /* Table */
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; overflow: hidden }
     table { width: 100%; border-collapse: collapse; font-size: 13px }
-    th { text-align: left; padding: 10px 12px; color: #64748b; font-size: 11px;
-         text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid #334155 }
-    td { padding: 12px 12px; border-bottom: 1px solid #1e293b; vertical-align: middle }
-    tr:hover td { background: #1e293b }
+    th { text-align: left; padding: 10px 14px; color: #64748b; font-size: 10px;
+         text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid #334155;
+         white-space: nowrap }
+    td { padding: 11px 14px; border-bottom: 1px solid #0f172a; vertical-align: middle }
+    tr:last-child td { border-bottom: none }
+    tr:hover td { background: #243349 }
 
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600 }
-    .badge-ok      { background: #14532d; color: #86efac }
-    .badge-error   { background: #450a0a; color: #f87171 }
-    .badge-pending { background: #1e3a5f; color: #7dd3fc }
+    .site-name { font-weight: 600; color: #f1f5f9; font-size: 13px }
+    .site-url  { color: #475569; font-size: 11px; max-width: 220px;
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+    .site-detail { color: #64748b; font-size: 11px; max-width: 220px;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-style: italic }
 
-    .site-url { color: #64748b; font-size: 11px; max-width: 280px;
-                white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+    /* Badges */
+    .badge { display: inline-block; padding: 2px 9px; border-radius: 20px;
+             font-size: 11px; font-weight: 600; white-space: nowrap }
+    .ok      { background: #14532d; color: #86efac }
+    .error   { background: #450a0a; color: #f87171 }
+    .pending { background: #1e3a5f; color: #7dd3fc }
 
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 0; overflow: hidden }
-    .card-header { padding: 14px 20px; border-bottom: 1px solid #334155; font-size: 13px; font-weight: 600 }
+    /* Thumbnail */
+    .thumb { width: 44px; height: 33px; object-fit: cover; border-radius: 4px;
+             border: 1px solid #334155; cursor: pointer; display: block }
+    .thumb:hover { border-color: #0ea5e9 }
 
     /* Change feed */
     .change-list { list-style: none }
-    .change-item { padding: 14px 20px; border-bottom: 1px solid #334155 }
+    .change-item { padding: 13px 16px; border-bottom: 1px solid #334155 }
     .change-item:last-child { border-bottom: none }
-    .change-meta { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px }
-    .change-site { font-weight: 600; color: #f8fafc; font-size: 13px }
-    .change-time { font-size: 11px; color: #64748b }
-    .change-lines { font-size: 12px; font-family: monospace }
-    .line-added   { color: #86efac }
-    .line-removed { color: #f87171 }
-    .change-summary { font-size: 11px; color: #38bdf8; margin-top: 4px }
+    .ch-meta { display: flex; justify-content: space-between; margin-bottom: 5px }
+    .ch-site { font-weight: 600; font-size: 13px; color: #f1f5f9 }
+    .ch-time { font-size: 11px; color: #64748b }
+    .ch-lines { font-size: 12px; font-family: monospace; line-height: 1.6 }
+    .added   { color: #86efac }
+    .removed { color: #f87171 }
+    .ch-summary { font-size: 11px; color: #38bdf8; margin-top: 5px }
+    .no-changes { padding: 32px; text-align: center; color: #475569; font-size: 13px }
 
-    .no-changes { padding: 28px; text-align: center; color: #475569; font-size: 13px }
+    /* Flash messages */
+    .flash { background: #14532d; color: #86efac; padding: 10px 16px;
+             border-radius: 8px; margin-bottom: 16px; font-size: 13px }
 
-    .flash { background: #14532d; color: #86efac; padding: 10px 16px; border-radius: 8px;
-             margin-bottom: 16px; font-size: 13px }
+    /* Lightbox */
+    #lightbox { display:none; position:fixed; inset:0; background:rgba(0,0,0,.85);
+                z-index:9999; align-items:center; justify-content:center; cursor:zoom-out }
+    #lightbox.open { display:flex }
+    #lightbox img { max-width:90vw; max-height:90vh; border-radius:8px;
+                    box-shadow:0 20px 60px rgba(0,0,0,.8) }
 
-    /* Baseline image preview */
-    .preview-thumb { width: 48px; height: 36px; object-fit: cover; border-radius: 4px;
-                     border: 1px solid #334155; cursor: pointer }
-
-    .two-col { display: grid; grid-template-columns: 1fr 380px; gap: 24px; align-items: start }
-    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr } }
+    /* Check-now spinner */
+    .spinning { animation: spin .8s linear infinite; display:inline-block }
+    @keyframes spin { to { transform: rotate(360deg) } }
   </style>
 </head>
 <body>
-  <header>
-    <h1>🔍 WebMonitor</h1>
-    <div class="actions">
-      <a href="/logs" class="btn btn-ghost">Logs</a>
-      <button class="btn btn-ghost" onclick="checkNow()">Check Now</button>
-      <a href="/site/add" class="btn btn-blue">+ Add Site</a>
-    </div>
-  </header>
+<header>
+  <h1>🔍 WebMonitor</h1>
+  <div class="actions">
+    <a href="/logs" class="btn btn-ghost">Logs</a>
+    <button class="btn btn-ghost" id="checkAllBtn" onclick="checkAll()">Check Now</button>
+    <a href="/site/add" class="btn btn-primary">+ Add Site</a>
+  </div>
+</header>
 
-  <div class="main">
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
-      {% endif %}
-    {% endwith %}
+<div class="main">
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}
+  {% endwith %}
 
-    <!-- Stats -->
-    <div class="stats-row">
-      <div class="stat"><div class="num">{{ total_sites }}</div><div class="lbl">Sites monitored</div></div>
-      <div class="stat"><div class="num">{{ total_changes }}</div><div class="lbl">Total changes</div></div>
-    </div>
+  <div class="stats-row">
+    <div class="stat"><div class="num">{{ total_sites }}</div><div class="lbl">Sites Monitored</div></div>
+    <div class="stat"><div class="num">{{ total_changes }}</div><div class="lbl">Total Changes</div></div>
+  </div>
 
-    <div class="two-col">
-      <!-- Sites table -->
-      <div>
-        <h2>Monitored Sites</h2>
-        <div class="card">
-          <table>
-            <thead>
-              <tr>
-                <th>Site</th>
-                <th>Mode</th>
-                <th>Schedule</th>
-                <th>Region</th>
-                <th>Last Check</th>
-                <th>Changes</th>
-                <th>Status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for site in monitored_sites %}
-              <tr>
-                <td>
-                  <div style="font-weight:600;color:#f8fafc">{{ site.name }}</div>
-                  <div class="site-url">{{ site.url }}</div>
-                </td>
-                <td><span style="font-size:12px;color:#94a3b8">{{ site.mode }}</span></td>
-                <td><span style="font-size:12px">{{ site.schedule }}</span></td>
-                <td><span style="font-size:11px;color:#64748b">{{ site.clip }}</span></td>
-                <td style="font-size:12px;color:#94a3b8">{{ site.last_check }}</td>
-                <td style="font-size:13px">{{ site.total_changes }}</td>
-                <td>
-                  {% if site.status == 'OK' %}
-                    <span class="badge badge-ok">OK</span>
-                  {% elif site.status == 'Error' %}
-                    <span class="badge badge-error">Error</span>
-                  {% else %}
-                    <span class="badge badge-pending">Pending</span>
-                  {% endif %}
-                </td>
-                <td>
-                  <div style="display:flex;gap:6px;align-items:center">
-                    {% if site.has_baseline %}
-                    <a href="/baseline/{{ site.name }}" target="_blank">
-                      <img class="preview-thumb" src="/baseline/{{ site.name }}" alt="baseline">
-                    </a>
-                    {% endif %}
-                    <a href="/site/edit/{{ site.name }}" class="btn btn-ghost btn-sm">Edit</a>
-                    <form method="POST" action="/site/delete/{{ site.name }}" style="display:inline"
-                          onsubmit="return confirm('Delete {{ site.name }}?')">
-                      <button type="submit" class="btn btn-danger">Del</button>
-                    </form>
-                  </div>
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
+  <div class="two-col">
+    <!-- Sites table -->
+    <div>
+      <h2>Monitored Sites</h2>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Site</th><th>Mode</th><th>Schedule</th><th>Region</th>
+              <th>Last Check</th><th>Changes</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for s in sites %}
+          <tr>
+            <td>
+              <div class="site-name">{{ s.name }}</div>
+              <div class="site-url" title="{{ s.url }}">{{ s.url }}</div>
+              {% if s.status == "Error" and s.last_detail %}
+                <div class="site-detail" title="{{ s.last_detail }}">{{ s.last_detail }}</div>
+              {% endif %}
+            </td>
+            <td><span style="font-size:12px;color:#94a3b8">{{ s.mode }}</span></td>
+            <td><span style="font-size:12px">{{ s.schedule }}</span></td>
+            <td><span style="font-size:11px;color:#64748b">{{ s.clip }}</span></td>
+            <td style="font-size:12px;color:#94a3b8;white-space:nowrap">{{ s.last_check }}</td>
+            <td style="font-size:13px;text-align:center">{{ s.total_changes }}</td>
+            <td>
+              <span class="badge {{ s.status | lower }}">{{ s.status }}</span>
+            </td>
+            <td>
+              <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+                {% if s.has_baseline %}
+                <img class="thumb" src="/baseline/{{ s.name }}"
+                     onclick="openLightbox('/baseline/{{ s.name }}')" alt="baseline">
+                {% endif %}
+                <button class="btn btn-ghost btn-sm" onclick="checkOne('{{ s.name }}', this)">▶</button>
+                <a href="/site/edit/{{ s.name }}" class="btn btn-ghost btn-sm">Edit</a>
+                <form method="POST" action="/reset-baseline/{{ s.name }}" style="display:inline"
+                      onsubmit="return confirm('Clear baseline for {{ s.name }}?')">
+                  <button type="submit" class="btn btn-warn">↺</button>
+                </form>
+                <form method="POST" action="/site/delete/{{ s.name }}" style="display:inline"
+                      onsubmit="return confirm('Delete {{ s.name }}?')">
+                  <button type="submit" class="btn btn-danger">Del</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
       </div>
+    </div>
 
-      <!-- Change feed -->
-      <div>
-        <h2>Recent Changes</h2>
-        <div class="card">
-          {% if changes %}
-            <ul class="change-list">
-            {% for c in changes %}
-              <li class="change-item">
-                <div class="change-meta">
-                  <span class="change-site">{{ c.site_name }}</span>
-                  <span class="change-time">{{ c.timestamp }}</span>
-                </div>
-                <div class="change-lines">
-                  {% for l in c.added[:4] %}
-                    <div class="line-added">+ {{ l }}</div>
-                  {% endfor %}
-                  {% for l in c.removed[:2] %}
-                    <div class="line-removed">- {{ l }}</div>
-                  {% endfor %}
-                </div>
-                <div class="change-summary">{{ c.summary }}</div>
-              </li>
-            {% endfor %}
-            </ul>
-          {% else %}
-            <div class="no-changes">No changes recorded yet</div>
-          {% endif %}
-        </div>
+    <!-- Change feed -->
+    <div>
+      <h2>Recent Changes</h2>
+      <div class="card">
+        {% if changes %}
+          <ul class="change-list">
+          {% for c in changes %}
+            <li class="change-item">
+              <div class="ch-meta">
+                <span class="ch-site">{{ c.site_name }}</span>
+                <span class="ch-time">{{ c.timestamp }}</span>
+              </div>
+              <div class="ch-lines">
+                {% for l in c.added %}<div class="added">+ {{ l }}</div>{% endfor %}
+                {% for l in c.removed %}<div class="removed">− {{ l }}</div>{% endfor %}
+              </div>
+              <div class="ch-summary">{{ c.summary }}</div>
+            </li>
+          {% endfor %}
+          </ul>
+        {% else %}
+          <div class="no-changes">No changes recorded yet</div>
+        {% endif %}
       </div>
     </div>
   </div>
+</div>
 
-  <script>
-  async function checkNow() {
-    const btn = document.querySelector("button[onclick='checkNow()']");
-    btn.textContent = "Dispatching…";
-    btn.disabled = true;
-    await fetch("/check-now", { method: "POST" });
-    setTimeout(() => location.reload(), 1500);
-  }
-  </script>
+<!-- Lightbox -->
+<div id="lightbox" onclick="closeLightbox()">
+  <img id="lbImg" src="" alt="baseline">
+</div>
+
+<script>
+function openLightbox(src) {
+  document.getElementById("lbImg").src = src;
+  document.getElementById("lightbox").classList.add("open");
+}
+function closeLightbox() {
+  document.getElementById("lightbox").classList.remove("open");
+}
+
+async function checkAll() {
+  const btn = document.getElementById("checkAllBtn");
+  btn.innerHTML = '<span class="spinning">↻</span> Checking…';
+  btn.disabled = true;
+  await fetch("/check-now", { method: "POST" });
+  setTimeout(() => location.reload(), 2000);
+}
+
+async function checkOne(name, btn) {
+  btn.innerHTML = '<span class="spinning">↻</span>';
+  btn.disabled = true;
+  await fetch("/check-now/" + encodeURIComponent(name), { method: "POST" });
+  setTimeout(() => location.reload(), 2000);
+}
+</script>
 </body>
 </html>
