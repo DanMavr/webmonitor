@@ -103,7 +103,7 @@
 
     <!-- ── Mode ──────────────────────────────────────────────────────────── -->
     <div class="section">Monitor Mode</div>
-    <div class="mode-tabs">
+    <div class="mode-tabs" id="mode-tabs">
       <button type="button" class="mode-tab {% if not site or site.mode != 'json_api' %}active{% endif %}"
               onclick="setMode('screenshot')">📸 Screenshot + OCR</button>
       <button type="button" class="mode-tab {% if site and site.mode == 'json_api' %}active{% endif %}"
@@ -177,7 +177,7 @@
 
     <!-- ── Schedule ──────────────────────────────────────────────────────── -->
     <div class="section">Schedule</div>
-    <div class="mode-tabs">
+    <div class="mode-tabs" id="sched-tabs">
       <button type="button" class="mode-tab {% if not site or site.schedule_type != 'time_window' %}active{% endif %}"
               onclick="setSched('interval')">⏱ Interval</button>
       <button type="button" class="mode-tab {% if site and site.schedule_type == 'time_window' %}active{% endif %}"
@@ -236,7 +236,7 @@
     document.getElementById("screenshot-fields").style.display = mode === "screenshot" ? "block" : "none";
     document.getElementById("json-api-fields").style.display   = mode === "json_api"   ? "block" : "none";
     // Sync first two tabs only
-    const tabs = document.querySelectorAll(".mode-tabs:first-of-type .mode-tab");
+    const tabs = document.querySelectorAll("#mode-tabs .mode-tab");
     tabs[0].classList.toggle("active", mode === "screenshot");
     tabs[1].classList.toggle("active", mode === "json_api");
   }
@@ -248,7 +248,7 @@
     document.getElementById("interval-fields").style.display   = type === "interval"    ? "block" : "none";
     document.getElementById("timewindow-fields").style.display = type === "time_window" ? "block" : "none";
     // Sync the second set of mode-tabs
-    const tabs = document.querySelectorAll(".mode-tabs")[1]?.querySelectorAll(".mode-tab");
+    const tabs = document.querySelectorAll("#sched-tabs .mode-tab");
     if (tabs) { tabs[0].classList.toggle("active", type === "interval"); tabs[1].classList.toggle("active", type === "time_window"); }
   }
   setSched(document.getElementById("sched-type").value);
