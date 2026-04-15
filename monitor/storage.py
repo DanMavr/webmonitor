@@ -1,249 +1,165 @@
 """
-All SQLite storage operations for WebMonitor.
-Includes baseline inspection (previously inspect.py).
+storage.py — minimal two-file-per-site storage.
 
-All timestamps stored as UTC strings: "%Y-%m-%d %H:%M:%S"
+Layout:
+  data/sites/<safe_name>/baseline.png        ← last known screenshot crop
+  data/sites/<safe_name>/baseline_text.txt   ← OCR text of that screenshot
+  data/monitor.log                           ← errors
+  data/activity.log                          ← INFO activity stream
+  data/changes.db                            ← SQLite change history
 """
 
 import sqlite3
+import re
 import logging
+from pathlib import Path
 from datetime import datetime, timezone
 
 logger = logging.getLogger("monitor")
 
-DB = "data/monitor.db"
-
-PRUNE_KEEP = 3   # snapshots to keep per URL
-
-
-# ── Schema ────────────────────────────────────────────────────────────────────
-
-def _col_names(conn, table):
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return [r[1] for r in rows]
+DB        = "data/changes.db"
+SITES_DIR = Path("data/sites")
 
 
-def _migrate_if_needed(conn):
-    cols = _col_names(conn, "snapshots")
-    if "site_name" not in cols:
-        conn.execute("ALTER TABLE snapshots ADD COLUMN site_name TEXT")
-    if "word_count" not in cols:
-        conn.execute("ALTER TABLE snapshots ADD COLUMN word_count INTEGER DEFAULT 0")
-    cols_changes = _col_names(conn, "changes")
-    if "site_name" not in cols_changes:
-        conn.execute("ALTER TABLE changes ADD COLUMN site_name TEXT")
-
+# ── Initialisation ────────────────────────────────────────────────────────────
 
 def init_db():
-    with sqlite3.connect(DB) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS snapshots (
-                site_name TEXT,
-                url       TEXT,
-                content   TEXT,
-                checksum  TEXT,
-                timestamp TEXT
-            )""")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS changes (
-                site_name    TEXT,
-                url          TEXT,
-                old_checksum TEXT,
-                new_checksum TEXT,
-                change_pct   TEXT,
-                diff_text    TEXT,
-                timestamp    TEXT
-            )""")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS job_log (
-                site_name TEXT,
-                status    TEXT,
-                message   TEXT,
-                timestamp TEXT
-            )""")
-        # Indexes for query performance
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_snap_url_ts  ON snapshots (url, timestamp)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_snap_site    ON snapshots (site_name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_changes_site ON changes   (site_name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_joblog_site  ON job_log   (site_name)")
-        _migrate_if_needed(conn)
-        conn.commit()
+    Path("data").mkdir(exist_ok=True)
+    SITES_DIR.mkdir(exist_ok=True)
+    conn = sqlite3.connect(DB)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS changes (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            site_name   TEXT    NOT NULL,
+            timestamp   TEXT    NOT NULL,
+            added       TEXT,
+            removed     TEXT,
+            summary     TEXT
+        );
+        CREATE TABLE IF NOT EXISTS job_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            site_name   TEXT NOT NULL,
+            timestamp   TEXT NOT NULL,
+            status      TEXT NOT NULL,
+            detail      TEXT
+        );
+    """)
+    conn.commit()
+    conn.close()
 
 
-# ── Snapshots ─────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def get_last_snapshot(url: str) -> dict | None:
-    with sqlite3.connect(DB) as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT * FROM snapshots WHERE url = ? ORDER BY timestamp DESC LIMIT 1",
-            (url,)
-        ).fetchone()
-    return dict(row) if row else None
+def _safe_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9_-]", "_", name.lower())
 
 
-def save_snapshot(site_name: str, url: str, content: str, checksum: str):
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    with sqlite3.connect(DB) as conn:
-        conn.execute(
-            "INSERT INTO snapshots VALUES (?, ?, ?, ?, ?)",
-            (site_name, url, content, checksum, ts)
-        )
-        conn.commit()
+def _site_dir(name: str) -> Path:
+    d = SITES_DIR / _safe_name(name)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
-# ── Changes ───────────────────────────────────────────────────────────────────
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-def save_change(site_name: str, url: str, old_checksum: str,
-                new_checksum: str, change_pct: float, diff_text: str):
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    with sqlite3.connect(DB) as conn:
-        conn.execute(
-            "INSERT INTO changes VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (site_name, url, old_checksum, new_checksum,
-             str(change_pct), diff_text[:5000], ts)
-        )
-        conn.commit()
+
+# ── Baseline read/write ───────────────────────────────────────────────────────
+
+def load_baseline(site_name: str) -> tuple[bytes | None, str]:
+    """Return (png_bytes, text) for the stored baseline, or (None, "")."""
+    d = _site_dir(site_name)
+    png_path  = d / "baseline.png"
+    text_path = d / "baseline_text.txt"
+    png  = png_path.read_bytes()  if png_path.exists()  else None
+    text = text_path.read_text()  if text_path.exists() else ""
+    return png, text
+
+
+def save_baseline(site_name: str, png_bytes: bytes, text: str):
+    """Overwrite the baseline with the new screenshot and OCR text."""
+    d = _site_dir(site_name)
+    (d / "baseline.png").write_bytes(png_bytes)
+    (d / "baseline_text.txt").write_text(text)
+
+
+def baseline_exists(site_name: str) -> bool:
+    return (_site_dir(site_name) / "baseline.png").exists()
+
+
+def get_baseline_png_path(site_name: str) -> Path | None:
+    p = _site_dir(site_name) / "baseline.png"
+    return p if p.exists() else None
 
 
 # ── Job log ───────────────────────────────────────────────────────────────────
 
-def log_job(site_name: str, status: str, message: str):
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    with sqlite3.connect(DB) as conn:
+def log_job(site_name: str, status: str, detail: str = ""):
+    try:
+        conn = sqlite3.connect(DB)
         conn.execute(
-            "INSERT INTO job_log VALUES (?, ?, ?, ?)",
-            (site_name, status, message, ts)
+            "INSERT INTO job_log (site_name, timestamp, status, detail) VALUES (?,?,?,?)",
+            (site_name, _now(), status, detail),
         )
         conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"log_job failed: {e}")
 
 
-# ── Pruning ───────────────────────────────────────────────────────────────────
+# ── Change history ────────────────────────────────────────────────────────────
 
-def prune_snapshots(keep: int = PRUNE_KEEP):
-    """
-    Keep only the N most recent snapshots per URL.
-    Prevents unbounded growth on the Pi SD card.
-    Run periodically (e.g. daily).
-    """
-    with sqlite3.connect(DB) as conn:
-        urls = [r[0] for r in conn.execute(
-            "SELECT DISTINCT url FROM snapshots"
-        ).fetchall()]
-
-        deleted_total = 0
-        for url in urls:
-            rows = conn.execute(
-                "SELECT rowid FROM snapshots WHERE url = ? ORDER BY timestamp DESC",
-                (url,)
-            ).fetchall()
-            to_delete = [r[0] for r in rows[keep:]]
-            if to_delete:
-                conn.execute(
-                    f"DELETE FROM snapshots WHERE rowid IN ({','.join('?'*len(to_delete))})",
-                    to_delete
-                )
-                deleted_total += len(to_delete)
-
+def log_change(site_name: str, diff: dict):
+    try:
+        conn = sqlite3.connect(DB)
+        conn.execute(
+            "INSERT INTO changes (site_name, timestamp, added, removed, summary) VALUES (?,?,?,?,?)",
+            (
+                site_name,
+                _now(),
+                "\n".join(diff["added"]),
+                "\n".join(diff["removed"]),
+                diff["summary"],
+            ),
+        )
         conn.commit()
-
-    if deleted_total:
-        logger.info(f"prune_snapshots: removed {deleted_total} old snapshots")
-
-
-# ── Shared utilities ─────────────────────────────────────────────────────────
-
-def flatten(obj, prefix=""):
-    """
-    Recursively flatten a nested dict/list into dot-notation keys.
-    Used by both core.py (JSON diff) and app.py (JSON display).
-    List expansion capped at 5 items to prevent huge outputs.
-    """
-    items = {}
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            full_key = f"{prefix}.{k}" if prefix else k
-            if isinstance(v, (dict, list)):
-                items.update(flatten(v, full_key))
-            else:
-                items[full_key] = v
-    elif isinstance(obj, list):
-        for i, v in enumerate(obj[:5]):
-            full_key = f"{prefix}[{i}]"
-            if isinstance(v, (dict, list)):
-                items.update(flatten(v, full_key))
-            else:
-                items[full_key] = v
-    return items
+        conn.close()
+    except Exception as e:
+        logger.error(f"log_change failed: {e}")
 
 
-# ── Baseline inspection (merged from inspect.py) ──────────────────────────────
-
-def get_baseline_summary(site_name: str) -> dict:
-    """
-    Returns snapshot health summary for one site.
-    Used by dashboard /inspect route.
-    """
-    with sqlite3.connect(DB) as conn:
+def get_recent_changes(limit: int = 100) -> list[dict]:
+    try:
+        conn = sqlite3.connect(DB)
         conn.row_factory = sqlite3.Row
-        snapshots = conn.execute("""
-            SELECT url, content, checksum, timestamp
-            FROM snapshots
-            WHERE site_name = ?
-            ORDER BY timestamp DESC
-        """, (site_name,)).fetchall()
-
-    if not snapshots:
-        return {"error": f"No snapshots found for {site_name}"}
-
-    # One entry per URL — latest only
-    seen = {}
-    for snap in snapshots:
-        if snap["url"] not in seen:
-            seen[snap["url"]] = snap
-
-    pages = []
-    for url, snap in seen.items():
-        content    = snap["content"] or ""
-        word_count = len(content.split())
-        preview    = " ".join(content.split()[:30])
-
-        if word_count >= 200:
-            health = "OK"
-        elif word_count >= 50:
-            health = "Medium content"
-        elif word_count >= 1:
-            health = "Low content"
-        else:
-            health = "Empty"
-
-        pages.append({
-            "url":        url,
-            "word_count": word_count,
-            "preview":    preview,
-            "timestamp":  snap["timestamp"][:16],
-            "checksum":   snap["checksum"][:8] if snap["checksum"] else "",
-            "health":     health,
-            "healthy":    word_count >= 50,
-        })
-
-    return {
-        "site_name":    site_name,
-        "total_pages":  len(pages),
-        "total_words":  sum(p["word_count"] for p in pages),
-        "healthy_pages": sum(1 for p in pages if p["healthy"]),
-        "pages":        pages,
-    }
+        rows = conn.execute(
+            "SELECT * FROM changes ORDER BY timestamp DESC LIMIT ?", (limit,)
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
 
 
-def get_all_baselines_summary() -> list:
-    """Summary for all sites — used by dashboard main page."""
-    with sqlite3.connect(DB) as conn:
-        sites = [r[0] for r in conn.execute(
-            "SELECT DISTINCT site_name FROM snapshots"
-        ).fetchall()]
+def get_site_stats(site_name: str) -> dict:
+    try:
+        conn = sqlite3.connect(DB)
+        conn.row_factory = sqlite3.Row
 
-    return [
-        s for s in (get_baseline_summary(name) for name in sites)
-        if "error" not in s
-    ]
+        last_check = conn.execute(
+            "SELECT timestamp, status FROM job_log WHERE site_name=? ORDER BY timestamp DESC LIMIT 1",
+            (site_name,),
+        ).fetchone()
+
+        total_changes = conn.execute(
+            "SELECT COUNT(*) FROM changes WHERE site_name=?", (site_name,)
+        ).fetchone()[0]
+
+        conn.close()
+        return {
+            "last_check": last_check["timestamp"] if last_check else None,
+            "last_status": last_check["status"]    if last_check else None,
+            "total_changes": total_changes,
+        }
+    except Exception:
+        return {"last_check": None, "last_status": None, "total_changes": 0}
