@@ -57,7 +57,8 @@ def load_sites() -> list:
 
 async def _run_all_once(sites):
     from monitor.core import check_site
-    await asyncio.gather(*[check_site(s) for s in sites])
+    for site in sites:
+    await check_site(site)
 
 
 def cmd_check():
