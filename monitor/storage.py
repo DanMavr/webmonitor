@@ -19,8 +19,8 @@ from typing import Optional
 
 logger = logging.getLogger("monitor")
 
-DB        = "data/changes.db"
-SITES_DIR = Path("data/sites")
+DB        = str(Path(__file__).parent.parent / "data" / "changes.db")
+SITES_DIR = Path(__file__).parent.parent / "data" / "sites"
 
 
 # ── Initialisation ────────────────────────────────────────────────────────────
