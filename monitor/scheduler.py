@@ -1,141 +1,99 @@
+"""
+scheduler.py — APScheduler setup.
+
+Supports two schedule types per site:
+  interval    — check every N minutes
+  time_window — check every N minutes only within defined time windows
+                (used for LSE RNS: Mon-Fri 06:55-17:00 London time)
+"""
+
+import asyncio
 import logging
-from datetime import datetime, time as dt_time
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
-logger = logging.getLogger(__name__)
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.events import EVENT_JOB_ERROR
 
-DAY_MAP = {
-    "mon": 0, "tue": 1, "wed": 2,
-    "thu": 3, "fri": 4, "sat": 5, "sun": 6
-}
+from monitor.core import check_site
 
-
-def parse_day_range(day_str: str) -> list[int]:
-    """
-    Parse a day range string into a list of weekday integers (0=Mon, 6=Sun).
-
-    Examples:
-        "mon-fri"  → [0, 1, 2, 3, 4]
-        "sat-sun"  → [5, 6]
-        "mon"      → [0]
-
-    Raises ValueError for unrecognised day names or wrap-around ranges
-    (e.g. "fri-mon") which are ambiguous and likely a config mistake.
-    """
-    day_str = day_str.lower().strip()
-
-    if "-" in day_str:
-        parts = day_str.split("-", 1)
-        start_str = parts[0].strip()
-        end_str   = parts[1].strip()
-
-        if start_str not in DAY_MAP:
-            raise ValueError(f"Unrecognised day name: '{start_str}'")
-        if end_str not in DAY_MAP:
-            raise ValueError(f"Unrecognised day name: '{end_str}'")
-
-        start_int = DAY_MAP[start_str]
-        end_int   = DAY_MAP[end_str]
-
-        if start_int > end_int:
-            raise ValueError(
-                f"Wrap-around day range '{day_str}' is not supported. "
-                f"Split into two separate windows instead."
-            )
-
-        return list(range(start_int, end_int + 1))
-
-    if day_str not in DAY_MAP:
-        raise ValueError(f"Unrecognised day name: '{day_str}'")
-
-    return [DAY_MAP[day_str]]
+logger = logging.getLogger("monitor")
 
 
-def parse_time(t: str) -> tuple[int, int]:
-    """
-    Parse 'HH:MM' into (hour, minute).
-    Raises ValueError on bad format.
-    """
-    try:
-        h, m = t.split(":")
-        return int(h), int(m)
-    except Exception:
-        raise ValueError(f"Cannot parse time string: '{t}' — expected HH:MM")
+def _parse_days(days_str: str) -> list[str]:
+    """'mon-fri' → ['mon','tue','wed','thu','fri']"""
+    day_order = ["mon","tue","wed","thu","fri","sat","sun"]
+    if "-" in days_str:
+        start, end = days_str.lower().split("-")
+        s, e = day_order.index(start), day_order.index(end)
+        return day_order[s:e+1]
+    return [days_str.lower()]
 
 
-def is_in_window(site: dict) -> tuple[bool, str]:
-    """
-    Check whether the current time falls inside any of the site's
-    scheduled windows.
+def _in_window(windows: list[dict], tz_name: str) -> bool:
+    """Return True if current time falls inside any defined window."""
+    tz = ZoneInfo(tz_name)
+    now = datetime.now(tz)
+    day_abbr = now.strftime("%a").lower()
+    now_time = now.strftime("%H:%M")
 
-    Returns:
-        (True,  reason_string)  — inside a window, should run
-        (False, reason_string)  — outside all windows, should skip
-    """
-    windows  = site.get("windows", [])
-    tz_name  = site.get("timezone", "UTC")
-
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        logger.warning(
-            f"Unknown timezone '{tz_name}' for {site.get('name', '?')}, "
-            f"falling back to UTC"
-        )
-        tz = ZoneInfo("UTC")
-
-    now              = datetime.now(tz)
-    current_weekday  = now.weekday()
-    current_time     = now.time()
-
-    for window in windows:
-        days_str = window.get("days", "mon-fri")
-        from_str = window.get("from", "00:00")
-        to_str   = window.get("to",   "23:59")
-
-        try:
-            allowed_days       = parse_day_range(days_str)
-            from_h, from_m     = parse_time(from_str)
-            to_h,   to_m       = parse_time(to_str)
-        except ValueError as e:
-            logger.error(
-                f"Bad window config for {site.get('name', '?')}: {e}"
-            )
-            continue
-
-        from_time = dt_time(from_h, from_m)
-        to_time   = dt_time(to_h,   to_m)
-
-        if current_weekday in allowed_days and from_time <= current_time <= to_time:
-            return True, f"in window: {days_str} {from_str}–{to_str}"
-
-    return False, "outside all windows"
-
-
-def get_next_window_info(site: dict) -> str:
-    """
-    Return a human-readable schedule summary string for the startup table.
-
-    Examples:
-        "every 30min"
-        "mon-fri 07:10-17:00 every 5min | sat-sun 09:00-13:00 every 30min"
-    """
-    schedule_type = site.get("schedule_type", "interval")
-
-    if schedule_type == "interval":
-        interval = site.get("interval_minutes", 60)
-        return f"every {interval}min"
-
-    windows = site.get("windows", [])
-    if not windows:
-        return "time_window (no windows defined)"
-
-    parts = []
     for w in windows:
-        days = w.get("days", "?")
-        frm  = w.get("from", "?")
-        to   = w.get("to",   "?")
-        mins = w.get("interval_minutes", "?")
-        parts.append(f"{days} {frm}–{to} every {mins}min")
+        if day_abbr in _parse_days(w.get("days", "mon-fri")):
+            if w.get("from","00:00") <= now_time <= w.get("to","23:59"):
+                return True
+    return False
 
-    return " | ".join(parts)
+
+def _make_job(site: dict):
+    async def job():
+        try:
+            await check_site(site)
+        except Exception as e:
+            logger.error(f"Unhandled error in job [{site['name']}]: {e}", exc_info=True)
+
+    # For time_window sites we always schedule at the shortest window interval,
+    # but the job itself checks whether we're inside a window before running.
+    if site.get("schedule_type") == "time_window":
+        windows = site.get("windows", [])
+        tz_name = site.get("timezone", "UTC")
+        min_interval = min(w.get("interval_minutes", 1) for w in windows) if windows else 1
+
+        async def windowed_job():
+            if _in_window(windows, tz_name):
+                await job()
+            else:
+                logger.info(f"Outside window: {site['name']} — skipping")
+
+        return windowed_job, min_interval
+
+    return job, site.get("interval_minutes", 60)
+
+
+def build_scheduler(sites: list[dict]) -> AsyncIOScheduler:
+    scheduler = AsyncIOScheduler()
+
+    def on_error(event):
+        logger.error(f"Scheduler job error: {event.exception}")
+
+    scheduler.add_listener(on_error, EVENT_JOB_ERROR)
+
+    for site in sites:
+        job_fn, interval_min = _make_job(site)
+        scheduler.add_job(
+            job_fn,
+            "interval",
+            minutes=interval_min,
+            id=site["name"],
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info(f"Scheduled [{site['name']}] every {interval_min} min")
+
+    return scheduler
+
+
+def trigger_immediate(scheduler: AsyncIOScheduler, site: dict):
+    """Fire a site's check immediately (used by dashboard 'Check Now' button)."""
+    job_fn, _ = _make_job(site)
+    loop = asyncio.get_event_loop()
+    loop.create_task(job_fn())
