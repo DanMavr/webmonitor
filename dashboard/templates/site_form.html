@@ -5,68 +5,74 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0 }
-    body { background: #0f172a; color: #e2e8f0;
-           font-family: system-ui, sans-serif; padding: 32px 24px }
-    a.back { color: #38bdf8; font-size: 13px; text-decoration: none;
-             display: inline-block; margin-bottom: 24px }
-    a.back:hover { color: #7dd3fc }
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; padding: 32px 24px }
+    a.back { color: #38bdf8; font-size: 13px; text-decoration: none; display: inline-block; margin-bottom: 24px }
     h1 { font-size: 20px; font-weight: 700; color: #f8fafc; margin-bottom: 28px }
-    h1 span { color: #38bdf8 }
-    .form-card { background: #1e293b; border: 1px solid #334155;
-                 border-radius: 14px; padding: 28px; max-width: 700px }
-    .section-title { font-size: 12px; font-weight: 700; text-transform: uppercase;
-                     letter-spacing: .08em; color: #64748b; margin: 24px 0 14px;
-                     padding-bottom: 6px; border-bottom: 1px solid #334155 }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 28px; max-width: 860px }
+    .section { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+               color: #64748b; margin: 24px 0 14px; padding-bottom: 6px; border-bottom: 1px solid #334155 }
     .field { margin-bottom: 16px }
     label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 5px }
-    label span.req { color: #f87171; margin-left: 2px }
     input[type=text], input[type=number], input[type=url], select, textarea {
-      width: 100%; background: #0f172a; border: 1px solid #334155;
-      color: #e2e8f0; padding: 9px 12px; border-radius: 8px;
-      font-size: 14px; font-family: inherit;
-    }
-    input:focus, select:focus, textarea:focus {
-      outline: none; border-color: #38bdf8;
-    }
+      width: 100%; background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+      padding: 9px 12px; border-radius: 8px; font-size: 14px; font-family: inherit }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #38bdf8 }
     textarea { resize: vertical; min-height: 90px; font-family: monospace; font-size: 12px }
     .hint { font-size: 11px; color: #475569; margin-top: 4px }
-    .toggle-row { display: flex; gap: 24px; align-items: center; margin-bottom: 16px }
-    .toggle-group { display: flex; align-items: center; gap: 8px }
-    .toggle-group label { margin: 0; cursor: pointer; font-size: 13px; color: #94a3b8 }
-    input[type=checkbox] { width: 16px; height: 16px; cursor: pointer;
-                           accent-color: #38bdf8 }
-    .collapsible { border: 1px solid #334155; border-radius: 10px;
-                   overflow: hidden; margin-top: 8px }
-    .collapsible-header { background: #0f172a; padding: 12px 16px;
-                          cursor: pointer; font-size: 13px; color: #94a3b8;
-                          display: flex; justify-content: space-between;
-                          align-items: center; user-select: none }
-    .collapsible-header:hover { color: #e2e8f0 }
-    .collapsible-body { padding: 20px; display: none }
-    .collapsible-body.open { display: block }
-    .example-box { background: #0a1628; border: 1px solid #1e3a5f;
-                   border-radius: 8px; padding: 14px 16px; margin-top: 10px }
-    .example-box .ex-title { font-size: 11px; color: #38bdf8; font-weight: 700;
-                              text-transform: uppercase; letter-spacing: .06em;
-                              margin-bottom: 8px }
-    .example-box pre { font-size: 11px; color: #7dd3fc; line-height: 1.6;
-                       white-space: pre; font-family: monospace }
-    .example-box .ex-note { font-size: 11px; color: #475569; margin-top: 8px }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px }
     .error-box { background: #450a0a; color: #f87171; border-radius: 8px;
                  padding: 12px 16px; margin-bottom: 20px; font-size: 14px }
+    .btn-primary { background: #0ea5e9; color: #fff; border: none; padding: 11px 28px;
+                   border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer }
+    .btn-primary:hover { background: #38bdf8 }
+    .btn-secondary { background: #1e293b; color: #94a3b8; border: 1px solid #334155;
+                     padding: 9px 18px; border-radius: 8px; font-size: 13px; cursor: pointer }
+    .btn-secondary:hover { color: #e2e8f0; border-color: #64748b }
     .btn-row { display: flex; gap: 12px; margin-top: 24px; align-items: center }
-    .btn-save {
-      background: #0ea5e9; color: #fff; border: none;
-      padding: 11px 28px; border-radius: 8px; font-size: 14px;
-      font-weight: 600; cursor: pointer;
-    }
-    .btn-save:hover { background: #38bdf8 }
     .btn-cancel { color: #64748b; font-size: 13px; text-decoration: none }
-    .btn-cancel:hover { color: #94a3b8 }
-    #crawl-section { display: none }
-    #interval-section { display: block }
-    #timewindow-section { display: none }
-    #js-fields { display: none }
+
+    /* ── Clip region selector ──────────────────────────────────────────────── */
+    #clip-section { margin-top: 8px }
+    #screenshot-container {
+      position: relative; display: inline-block; cursor: crosshair;
+      border: 1px solid #334155; border-radius: 8px; overflow: hidden;
+      max-width: 100%; margin-top: 12px;
+      display: none; /* hidden until screenshot loads */
+    }
+    #screenshot-img { display: block; max-width: 100%; height: auto; user-select: none }
+    #clip-canvas {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none;
+    }
+    #drag-overlay {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      cursor: crosshair;
+    }
+    #clip-info {
+      margin-top: 8px; font-size: 12px; color: #38bdf8; font-family: monospace;
+      min-height: 20px;
+    }
+    #fetch-btn { display: inline-flex; align-items: center; gap: 8px }
+    .spinner { width: 14px; height: 14px; border: 2px solid #334155;
+               border-top-color: #38bdf8; border-radius: 50%;
+               animation: spin 0.7s linear infinite; display: none }
+    @keyframes spin { to { transform: rotate(360deg) } }
+    #fetch-error { color: #f87171; font-size: 12px; margin-top: 6px; display: none }
+
+    /* Existing clip preview (edit mode) */
+    #clip-preset { font-size: 12px; color: #64748b; margin-top: 4px }
+    #reset-clip-btn { font-size: 11px; color: #38bdf8; background: none; border: none;
+                      cursor: pointer; margin-left: 8px; text-decoration: underline }
+
+    /* Mode tabs */
+    .mode-tabs { display: flex; gap: 4px; margin-bottom: 20px }
+    .mode-tab { padding: 7px 18px; border-radius: 8px; font-size: 13px; cursor: pointer;
+                border: 1px solid #334155; background: #0f172a; color: #64748b }
+    .mode-tab.active { background: #0ea5e9; color: #fff; border-color: #0ea5e9 }
+    #json-api-fields { display: none }
+    #screenshot-fields { display: block }
+    #interval-fields { display: block }
+    #timewindow-fields { display: none }
   </style>
 </head>
 <body>
@@ -77,417 +83,307 @@
     <div class="error-box">{{ error }}</div>
   {% endif %}
 
-  <div class="form-card">
-    <form method="POST">
+  <div class="card">
+  <form method="POST" action="/site/save" id="site-form">
 
-      <!-- ── BASIC ── -->
-      <div class="section-title">Basic</div>
-
+    <!-- ── Basic ─────────────────────────────────────────────────────────── -->
+    <div class="section">Basic</div>
+    <div class="row2">
       <div class="field">
-        <label>Site name <span class="req">*</span></label>
-        <input type="text" name="name" value="{{ site.name or '' }}"
-               placeholder="e.g. LSE - RNS" required>
-        <div class="hint">Display name shown on the dashboard. Must be unique.</div>
+        <label>Site Name <span style="color:#f87171">*</span></label>
+        <input type="text" name="name" required
+               value="{{ site.name if site else '' }}" placeholder="e.g. EBRD Mongolia">
       </div>
-
       <div class="field">
-        <label>URL <span class="req">*</span></label>
-        <input type="url" name="url" value="{{ site.url or '' }}"
-               placeholder="https://example.com/page" required>
+        <label>URL <span style="color:#f87171">*</span></label>
+        <input type="url" name="url" required id="url-input"
+               value="{{ site.url if site else '' }}" placeholder="https://...">
+      </div>
+    </div>
+
+    <!-- ── Mode ──────────────────────────────────────────────────────────── -->
+    <div class="section">Monitor Mode</div>
+    <div class="mode-tabs">
+      <button type="button" class="mode-tab {% if not site or site.mode != 'json_api' %}active{% endif %}"
+              onclick="setMode('screenshot')">📸 Screenshot + OCR</button>
+      <button type="button" class="mode-tab {% if site and site.mode == 'json_api' %}active{% endif %}"
+              onclick="setMode('json_api')">🔌 JSON API</button>
+    </div>
+    <input type="hidden" name="mode" id="mode-input"
+           value="{{ site.mode if site else 'screenshot' }}">
+
+    <!-- ── Screenshot fields ─────────────────────────────────────────────── -->
+    <div id="screenshot-fields">
+      <div class="section">Clip Region — Select the area to monitor</div>
+
+      <div id="clip-section">
+        {% if site and site.clip %}
+          <div id="clip-preset">
+            Current region: <b>{{ site.clip.width }}×{{ site.clip.height }}</b>
+            at ({{ site.clip.x }}, {{ site.clip.y }})
+            <button type="button" id="reset-clip-btn" onclick="resetClip()">Reset</button>
+          </div>
+        {% endif %}
+
+        <button type="button" class="btn-secondary" id="fetch-btn"
+                onclick="fetchScreenshot()">
+          <span class="spinner" id="spinner"></span>
+          Fetch page screenshot
+        </button>
+        <div id="fetch-error">Could not load screenshot — check the URL above</div>
+
+        <div id="screenshot-container">
+          <img id="screenshot-img" src="" alt="page screenshot" draggable="false">
+          <canvas id="clip-canvas"></canvas>
+          <div id="drag-overlay"></div>
+        </div>
+        <div id="clip-info">Drag a rectangle over the area you want to monitor</div>
       </div>
 
+      <!-- Hidden clip inputs populated by JS -->
+      <input type="hidden" name="clip_x" id="clip_x" value="{{ site.clip.x if site and site.clip else 0 }}">
+      <input type="hidden" name="clip_y" id="clip_y" value="{{ site.clip.y if site and site.clip else 0 }}">
+      <input type="hidden" name="clip_w" id="clip_w" value="{{ site.clip.width if site and site.clip else 0 }}">
+      <input type="hidden" name="clip_h" id="clip_h" value="{{ site.clip.height if site and site.clip else 0 }}">
+
+      <div class="row2" style="margin-top:16px">
+        <div class="field">
+          <label>OCR Languages (comma-separated)</label>
+          <input type="text" name="ocr_languages"
+                 value="{{ (site.ocr_languages | join(', ')) if site and site.ocr_languages else 'en' }}"
+                 placeholder="en  or  en, ru">
+          <div class="hint">Use <b>en</b> for English. Add <b>ru</b> for Mongolian Cyrillic text.</div>
+        </div>
+        <div class="field">
+          <label>JS wait (seconds after page load)</label>
+          <input type="number" name="js_wait" min="0" max="30" step="0.5"
+                 value="{{ site.js_wait if site and site.js_wait else 3.0 }}">
+          <div class="hint">Extra time for React/SPA pages to render. 3s is usually enough.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── JSON API fields ───────────────────────────────────────────────── -->
+    <div id="json-api-fields">
+      <div class="section">JSON Fields to Watch</div>
       <div class="field">
-        <label>Monitoring mode</label>
-        <select name="mode" id="mode-select" onchange="onModeChange(this.value)">
-          <option value="single_page" {% if site.mode not in ('whole_site','json_api') %}selected{% endif %}>
-            One page only — watch a single specific URL
-          </option>
-          <option value="whole_site" {% if site.mode == 'whole_site' %}selected{% endif %}>
-            Whole website — crawl and watch multiple pages automatically
-          </option>
-          <option value="json_api" {% if site.mode == 'json_api' %}selected{% endif %}>
-            Data feed (JSON) — watch specific fields from a data API (advanced)
-          </option>
-        </select>
+        <label>Field names (comma-separated)</label>
+        <input type="text" name="json_fields_raw"
+               value="{{ (site.json_fields | join(', ')) if site and site.json_fields else '' }}"
+               placeholder="idnews, subjectnews, datelastnews">
+        <div class="hint">Dot notation for nested fields. Leave blank to watch entire response.</div>
       </div>
+    </div>
 
-      <!-- ── SCHEDULE ── -->
-      <div class="section-title">Schedule</div>
+    <!-- ── Schedule ──────────────────────────────────────────────────────── -->
+    <div class="section">Schedule</div>
+    <div class="mode-tabs">
+      <button type="button" class="mode-tab {% if not site or site.schedule_type != 'time_window' %}active{% endif %}"
+              onclick="setSched('interval')">⏱ Interval</button>
+      <button type="button" class="mode-tab {% if site and site.schedule_type == 'time_window' %}active{% endif %}"
+              onclick="setSched('time_window')">🕐 Time Window</button>
+    </div>
+    <input type="hidden" name="schedule_type" id="sched-type"
+           value="{{ site.schedule_type if site else 'interval' }}">
 
+    <div id="interval-fields">
+      <div class="field" style="max-width:200px">
+        <label>Every N minutes</label>
+        <input type="number" name="interval_minutes" min="1"
+               value="{{ site.interval_minutes if site and site.interval_minutes else 360 }}">
+      </div>
+    </div>
+
+    <div id="timewindow-fields">
       <div class="field">
-        <label>Schedule type</label>
-        <select name="schedule_type" id="sched-select"
-                onchange="onSchedChange(this.value)">
-          <option value="interval"
-            {% if site.schedule_type != 'time_window' %}selected{% endif %}>
-            interval — check every N minutes, always
-          </option>
-          <option value="time_window"
-            {% if site.schedule_type == 'time_window' %}selected{% endif %}>
-            time_window — check only during defined time windows
-          </option>
-        </select>
+        <label>Timezone</label>
+        <input type="text" name="timezone"
+               value="{{ site.timezone if site and site.timezone else 'Europe/London' }}"
+               style="max-width:260px" placeholder="Europe/London">
       </div>
-
-      <div id="interval-section">
-        <div class="field">
-          <label>Check interval (minutes)</label>
-          <input type="number" name="interval_minutes" min="1" max="10080"
-                 value="{{ site.interval_minutes or 360 }}">
-          <div class="hint">Common values: 60 (1h), 360 (6h), 720 (12h)</div>
-        </div>
+      <div class="field">
+        <label>Windows (YAML list)</label>
+        <textarea name="windows_yaml" rows="5" placeholder="- days: mon-fri&#10;  from: '06:55'&#10;  to: '17:00'&#10;  interval_minutes: 1">{{ site.windows | toyaml if site and site.windows else '' }}</textarea>
       </div>
+    </div>
 
-      <div id="timewindow-section">
-        <div class="field">
-          <label>Timezone</label>
-          <input type="text" name="timezone"
-                 value="{{ site.timezone or 'Europe/London' }}"
-                 placeholder="Europe/London">
-          <div class="hint">IANA timezone name. Used to interpret window times.</div>
-        </div>
-        <div class="field">
-          <label>Windows (YAML)</label>
-          <textarea name="windows_yaml" id="windows-yaml"
-                    placeholder="Paste your windows YAML here..."
-                    rows="8">{{ windows_yaml or '' }}</textarea>
-          <div class="hint">Define one or more time windows as a YAML list.</div>
+    <!-- ── SSL ───────────────────────────────────────────────────────────── -->
+    <div class="section">Options</div>
+    <div class="field">
+      <label>
+        <input type="checkbox" name="ssl_verify" value="false"
+               {% if site and site.ssl_verify == false %}checked{% endif %}
+               style="width:auto;margin-right:6px">
+        Skip SSL certificate verification (for sites with self-signed certs)
+      </label>
+    </div>
 
-          <!-- Example box -->
-          <div class="example-box" style="margin-top:12px">
-            <div class="ex-title">Example — LSE RNS style (two windows)</div>
-            <pre>- days: mon-fri
-  from: "06:55"
-  to: "07:10"
-  interval_minutes: 1
+    <div class="btn-row">
+      <button type="submit" class="btn-primary">Save Site</button>
+      <a href="/" class="btn-cancel">Cancel</a>
+    </div>
 
-- days: mon-fri
-  from: "07:10"
-  to: "17:00"
-  interval_minutes: 5</pre>
-            <div class="ex-note">
-              Window 1: checks every <strong>1 min</strong> from 06:55–07:10 Mon–Fri
-              (catches the early morning RNS drop).<br>
-              Window 2: checks every <strong>5 min</strong> from 07:10–17:00 Mon–Fri
-              (full market hours coverage).<br><br>
-              Valid day values: <code>mon tue wed thu fri sat sun</code>
-              or ranges like <code>mon-fri</code> · <code>sat-sun</code><br>
-              Times in <code>HH:MM</code> 24h format.
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── SENSITIVITY ── -->
-      <div class="collapsible">
-        <div class="collapsible-header" onclick="toggleSection('sensitivity-body','sensitivity-arrow')">
-          Sensitivity &amp; Filters
-          <span id="sensitivity-arrow">▸</span>
-        </div>
-        <div class="collapsible-body" id="sensitivity-body">
-          <div class="field">
-            <label>Min content words</label>
-            <input type="number" name="min_content_words" min="0"
-                   value="{{ site.min_content_words or 50 }}">
-            <div class="hint">
-              If the page returns fewer words than this, the system assumes it didn't load
-              properly and retries using a full browser (Selenium).<br>
-              Default 50 works for most sites. Set lower (e.g. 20) for intentionally short pages.
-              Set to 0 to disable the check entirely.
-            </div>
-          </div>
-          <div class="field">
-            <label>Min change % to trigger alert</label>
-            <input type="number" name="min_change_percent" min="0" max="100" step="0.5"
-                   value="{{ site.min_change_percent or 3 }}">
-            <div class="hint">
-              How much the page content must change before you get a notification.<br>
-              <strong>0–1%</strong> = very sensitive — any small addition triggers an alert (use for LSE).<br>
-              <strong>3–5%</strong> = good for pages with dynamic content (timestamps, counters, banners).<br>
-              <strong>10%+</strong> = only alert on major changes.
-            </div>
-          </div>
-
-          <!-- ── JSON API Fields ─────────────────────────────────────── -->
-          <div id="json-api-section" style="display:none">
-            <div class="field">
-              <label>JSON Fields to monitor</label>
-              <div class="hint" style="margin-bottom:8px">
-                Paste the API URL above and click <strong>Detect Fields</strong>
-                to see all available fields. Tick the ones you want to monitor —
-                an alert fires when any ticked field changes value.
-              </div>
-              <button type="button" id="detect-fields-btn"
-                      onclick="detectJsonFields()"
-                      style="margin-bottom:12px;padding:6px 16px;background:#38bdf8;color:#000;border:none;border-radius:4px;cursor:pointer;font-weight:600">
-                🔍 Detect Fields
-              </button>
-              <div id="json-fields-loading" style="display:none;color:#94a3b8;font-size:13px">
-                Fetching fields…
-              </div>
-              <div id="json-fields-error" style="display:none;color:#f87171;font-size:13px"></div>
-              <div id="json-fields-list" style="margin-top:8px"></div>
-              <!-- Hidden textarea stores the final comma-separated field list -->
-              <textarea name="json_fields_raw" id="json-fields-raw"
-                        style="display:none">{{ site.json_fields|join(',') if site.json_fields else '' }}</textarea>
-            </div>
-          </div>
-
-          <script>
-          // onModeChange is defined globally at bottom of page (merged)
-          // Pre-render saved JSON fields as checkboxes on page load
-          document.addEventListener('DOMContentLoaded', function() {
-            const raw = document.getElementById('json-fields-raw');
-            if (raw && raw.value) {
-              const saved = raw.value.split(',').map(s => s.trim()).filter(Boolean);
-              renderFieldCheckboxes(saved.map(f => ({key: f, value: '…', checked: true})), []);
-            }
-          });
-
-          function detectJsonFields() {
-            const urlInput = document.querySelector('input[name="url"]');
-            if (!urlInput || !urlInput.value.trim()) {
-              alert('Please enter a URL first.');
-              return;
-            }
-            document.getElementById('json-fields-loading').style.display = 'block';
-            document.getElementById('json-fields-error').style.display   = 'none';
-            document.getElementById('json-fields-list').innerHTML         = '';
-
-            fetch('/api/json-fields?url=' + encodeURIComponent(urlInput.value.trim()))
-              .then(r => r.json())
-              .then(data => {
-                document.getElementById('json-fields-loading').style.display = 'none';
-                if (data.error) {
-                  document.getElementById('json-fields-error').textContent = data.error;
-                  document.getElementById('json-fields-error').style.display = 'block';
-                  return;
-                }
-                // Get currently saved fields so we pre-check them
-                const raw = document.getElementById('json-fields-raw');
-                const saved = raw && raw.value
-                  ? raw.value.split(',').map(s => s.trim()).filter(Boolean)
-                  : [];
-                renderFieldCheckboxes(data.fields, saved);
-              })
-              .catch(e => {
-                document.getElementById('json-fields-loading').style.display = 'none';
-                document.getElementById('json-fields-error').textContent = 'Request failed: ' + e;
-                document.getElementById('json-fields-error').style.display = 'block';
-              });
-          }
-
-          function renderFieldCheckboxes(fields, saved) {
-            var container = document.getElementById('json-fields-list');
-            container.innerHTML = '';
-            fields.forEach(function(f) {
-              var isChecked = saved.length > 0 && saved.indexOf(f.key) >= 0;
-              var row = document.createElement('div');
-              row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid #1e293b';
-
-              var cb = document.createElement('input');
-              cb.type = 'checkbox';
-              cb.id = 'jf_' + f.key;
-              cb.value = f.key;
-              cb.checked = isChecked;
-              cb.onchange = updateJsonFieldsRaw;
-              cb.style.cssText = 'width:16px;height:16px;cursor:pointer;flex-shrink:0';
-
-              var lbl = document.createElement('label');
-              lbl.htmlFor = 'jf_' + f.key;
-              lbl.textContent = f.key;
-              lbl.style.cssText = 'flex:0 0 220px;font-family:monospace;font-size:13px;color:#38bdf8;cursor:pointer';
-
-              var val = document.createElement('span');
-              val.textContent = f.value;
-              val.style.cssText = 'font-size:13px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-
-              row.appendChild(cb);
-              row.appendChild(lbl);
-              row.appendChild(val);
-              container.appendChild(row);
-            });
-            updateJsonFieldsRaw();
-          }
-
-          function updateJsonFieldsRaw() {
-            const checkboxes = document.querySelectorAll('#json-fields-list input[type=checkbox]:checked');
-            const fields = Array.from(checkboxes).map(c => c.value);
-            document.getElementById('json-fields-raw').value = fields.join(',');
-          }
-          </script>
-
-          <div id="target-selector-field" class="field">
-            <label>Watch selector — focus on one section only <span style="color:#38bdf8;font-size:11px;font-weight:400;margin-left:6px">(optional)</span></label>
-            <input type="text" name="target_selector"
-                   value="{{ site.target_selector or '' }}"
-                   placeholder=".news-table-results-component">
-            <div class="hint">
-              If set, the monitor <strong>only</strong> reads this part of the page and ignores
-              everything else.<br>
-              Use this when you want to track a specific section — a news list, a project table,
-              an announcements block — without being triggered by changes elsewhere on the page.<br>
-              Leave blank to watch the whole page (most common).<br>
-              Example — LSE RNS table only: <code>.news-table-results-component</code>
-            </div>
-          </div>
-
-          <div class="field">
-            <label>Ignore selectors (one per line)</label>
-            <textarea name="ignore_selectors"
-                      placeholder=".timestamp&#10;.price-ticker&#10;[data-testid='time']"
-                      >{{ ignore_selectors_text or '' }}</textarea>
-            <div class="hint">
-              Removes parts of the page before comparing so they don't trigger false alerts.<br>
-              Use this for things that change on every load but carry no useful signal:
-              navigation menus, footers, ad banners, price tickers, "last updated" labels.<br>
-              Examples: <code>header</code> &nbsp; <code>footer</code> &nbsp;
-              <code>nav</code> &nbsp; <code>.ticker</code> &nbsp; <code>#sidebar</code>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── JAVASCRIPT ── -->
-      <div class="collapsible" style="margin-top:10px">
-        <div class="collapsible-header" onclick="toggleSection('js-body','js-arrow')">
-          JavaScript Rendering
-          <span id="js-arrow">▸</span>
-        </div>
-        <div class="collapsible-body" id="js-body">
-          <div style="background:#0a1628;border:1px solid #1e3a5f;border-radius:8px;
-                      padding:14px 16px;margin-bottom:16px;font-size:12px;color:#7dd3fc;line-height:1.7">
-            <strong style="color:#38bdf8">When do you need this?</strong><br>
-            Some websites build their content in the browser — the page loads empty first,
-            then fills in with data. A normal fetch only gets the empty shell.<br><br>
-            <strong style="color:#38bdf8">How to tell if you need it:</strong>
-            After adding a site, check its <strong>Inspect</strong> page.
-            If it shows 0 or very few words (&lt;50), enable this.<br><br>
-            <strong style="color:#38bdf8">Trade-off:</strong>
-            Adds 5–15 seconds per check. Use only when needed.<br>
-            <strong style="color:#38bdf8">Currently enabled on:</strong>
-            LSE - RNS, GCF - Mongolia, EIC, Opendatalab - Zula, Petromatad.
-          </div>
-          <div class="toggle-row">
-            <div class="toggle-group">
-              <input type="checkbox" id="js-toggle" name="javascript" value="true"
-                     onchange="document.getElementById('js-wait-field').style.display=this.checked?'block':'none'"
-                     {% if site.javascript %}checked{% endif %}>
-              <label for="js-toggle">Enable JavaScript rendering (full browser, slower)</label>
-            </div>
-          </div>
-          <div id="js-wait-field" style="display:{% if site.javascript %}block{% else %}none{% endif %}">
-            <div class="field">
-              <label>Browser wait time (seconds)</label>
-              <input type="number" name="js_wait_seconds" min="1" max="30"
-                     value="{{ site.js_wait_seconds or 5 }}">
-              <div class="hint">
-                How long to wait after the page loads before reading its content.
-                Increase for slow-loading pages (e.g. 10s for LSE, GCF). 5s is fine for most.
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── ADVANCED ── -->
-      <div class="collapsible" style="margin-top:10px">
-        <div class="collapsible-header" onclick="toggleSection('adv-body','adv-arrow')">
-          Advanced
-          <span id="adv-arrow">▸</span>
-        </div>
-        <div class="collapsible-body" id="adv-body">
-          <div class="toggle-row">
-            <div class="toggle-group">
-              <input type="checkbox" id="ssl-toggle" name="ssl_verify" value="false"
-                     {% if site.ssl_verify == False %}checked{% endif %}>
-              <label for="ssl-toggle">Skip SSL certificate verification</label>
-            </div>
-            <div class="hint" style="margin-top:8px">
-              Enable only for sites with known certificate issues (e.g. eic.mn, energy.gov.mn).
-              The site will still be fetched — this just stops the monitor from refusing to
-              connect due to an expired or self-signed certificate.<br>
-              Currently enabled on: EIC, Mongolia Energy Ministry.
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── CRAWL ── -->
-      <div id="crawl-section">
-        <div class="section-title" style="margin-top:24px">Crawl Settings (whole_site)</div>
-        <div class="toggle-row">
-          <div class="toggle-group">
-            <input type="checkbox" id="sitemap-toggle" name="use_sitemap" value="true"
-                   {% if crawl_use_sitemap %}checked{% endif %}>
-            <label for="sitemap-toggle">Use sitemap.xml for page discovery</label>
-          </div>
-          <div class="toggle-group">
-            <input type="checkbox" id="domain-toggle" name="stay_on_domain" value="true"
-                   {% if crawl_stay_on_domain %}checked{% endif %}>
-            <label for="domain-toggle">Stay on domain</label>
-          </div>
-        </div>
-        <div class="field">
-          <label>Max pages to monitor</label>
-          <input type="number" name="max_pages" min="1" max="500"
-                 value="{{ crawl_max_pages }}">
-        </div>
-        <div class="field">
-          <label>Exclude URL patterns (one per line)</label>
-          <textarea name="exclude_patterns"
-                    placeholder="/login&#10;/search&#10;.pdf&#10;.jpg"
-                    >{{ exclude_patterns_text or '' }}</textarea>
-          <div class="hint">Any URL containing these strings will be skipped.</div>
-        </div>
-      </div>
-
-      <div class="btn-row">
-        <button type="submit" class="btn-save">Save Site</button>
-        <a href="/" class="btn-cancel">Cancel</a>
-      </div>
-    </form>
+  </form>
   </div>
 
   <script>
-    function onModeChange(v) {
-      // whole_site crawl options
-      var crawl = document.getElementById('crawl-section');
-      if (crawl) crawl.style.display = (v === 'whole_site') ? 'block' : 'none';
+  // ── Mode switching ────────────────────────────────────────────────────────
+  function setMode(mode) {
+    document.getElementById("mode-input").value = mode;
+    document.querySelectorAll(".mode-tab").forEach((t, i) => {
+      t.classList.toggle("active", [mode === "screenshot", mode === "json_api"][i % 2]);
+    });
+    document.getElementById("screenshot-fields").style.display = mode === "screenshot" ? "block" : "none";
+    document.getElementById("json-api-fields").style.display   = mode === "json_api"   ? "block" : "none";
+    // Sync first two tabs only
+    const tabs = document.querySelectorAll(".mode-tabs:first-of-type .mode-tab");
+    tabs[0].classList.toggle("active", mode === "screenshot");
+    tabs[1].classList.toggle("active", mode === "json_api");
+  }
+  setMode(document.getElementById("mode-input").value);
 
-      // json_api fields section
-      var japi = document.getElementById('json-api-section');
-      if (japi) japi.style.display = (v === 'json_api') ? 'block' : 'none';
+  // ── Schedule switching ────────────────────────────────────────────────────
+  function setSched(type) {
+    document.getElementById("sched-type").value = type;
+    document.getElementById("interval-fields").style.display   = type === "interval"    ? "block" : "none";
+    document.getElementById("timewindow-fields").style.display = type === "time_window" ? "block" : "none";
+    // Sync the second set of mode-tabs
+    const tabs = document.querySelectorAll(".mode-tabs")[1]?.querySelectorAll(".mode-tab");
+    if (tabs) { tabs[0].classList.toggle("active", type === "interval"); tabs[1].classList.toggle("active", type === "time_window"); }
+  }
+  setSched(document.getElementById("sched-type").value);
 
-      // target selector (hide for json_api — not applicable)
-      var tgt = document.getElementById('target-selector-field');
-      if (tgt) tgt.style.display = (v === 'json_api') ? 'none' : 'block';
+  // ── Clip region selector ──────────────────────────────────────────────────
+  let imgNaturalW = 0, imgNaturalH = 0;
+  let dragging = false, startX = 0, startY = 0;
+  let selX = 0, selY = 0, selW = 0, selH = 0;
+  let clipLocked = {{ 'true' if site and site.clip else 'false' }};
 
-      // auto-open Sensitivity & Filters when json_api selected
-      if (v === 'json_api') {
-        var sensBody = document.getElementById('sensitivity-body');
-        var sensArr  = document.getElementById('sensitivity-arrow');
-        if (sensBody && !sensBody.classList.contains('open')) {
-          sensBody.classList.add('open');
-          if (sensArr) sensArr.textContent = '\u25be';
-        }
+  const container  = document.getElementById("screenshot-container");
+  const img        = document.getElementById("screenshot-img");
+  const canvas     = document.getElementById("clip-canvas");
+  const overlay    = document.getElementById("drag-overlay");
+  const ctx        = canvas.getContext("2d");
+  const clipInfo   = document.getElementById("clip-info");
+
+  {% if site and site.clip %}
+  // Pre-populate from existing clip
+  selX = {{ site.clip.x }}; selY = {{ site.clip.y }};
+  selW = {{ site.clip.width }}; selH = {{ site.clip.height }};
+  {% endif %}
+
+  function getScale() {
+    return imgNaturalW > 0 ? img.clientWidth / imgNaturalW : 1;
+  }
+
+  function drawSelection() {
+    canvas.width  = img.clientWidth;
+    canvas.height = img.clientHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (selW <= 0 || selH <= 0) return;
+    const s = getScale();
+    const dx = selX * s, dy = selY * s, dw = selW * s, dh = selH * s;
+    // Dim everything outside selection
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(dx, dy, dw, dh);
+    // Selection border
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth   = 2;
+    ctx.strokeRect(dx, dy, dw, dh);
+    // Corner handles
+    const hs = 6;
+    ctx.fillStyle = "#38bdf8";
+    [[dx,dy],[dx+dw,dy],[dx,dy+dh],[dx+dw,dy+dh]].forEach(([x,y]) => {
+      ctx.fillRect(x - hs/2, y - hs/2, hs, hs);
+    });
+  }
+
+  function updateHidden() {
+    document.getElementById("clip_x").value = Math.round(selX);
+    document.getElementById("clip_y").value = Math.round(selY);
+    document.getElementById("clip_w").value = Math.round(selW);
+    document.getElementById("clip_h").value = Math.round(selH);
+    clipInfo.textContent = selW > 0
+      ? `Region: ${Math.round(selW)}×${Math.round(selH)} px at (${Math.round(selX)}, ${Math.round(selY)})`
+      : "Drag a rectangle over the area you want to monitor";
+  }
+
+  function evtCoords(e) {
+    const r = overlay.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) / getScale(),
+      y: (e.clientY - r.top)  / getScale()
+    };
+  }
+
+  overlay.addEventListener("mousedown", e => {
+    const {x, y} = evtCoords(e);
+    startX = x; startY = y;
+    selW = 0; selH = 0;
+    dragging = true;
+    e.preventDefault();
+  });
+
+  overlay.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    const {x, y} = evtCoords(e);
+    selX = Math.min(startX, x); selY = Math.min(startY, y);
+    selW = Math.abs(x - startX); selH = Math.abs(y - startY);
+    drawSelection(); updateHidden();
+  });
+
+  overlay.addEventListener("mouseup", () => { dragging = false; });
+
+  function resetClip() {
+    selX = 0; selY = 0; selW = 0; selH = 0;
+    clipLocked = false;
+    drawSelection(); updateHidden();
+    const preset = document.getElementById("clip-preset");
+    if (preset) preset.style.display = "none";
+  }
+
+  // ── Fetch screenshot ──────────────────────────────────────────────────────
+  async function fetchScreenshot() {
+    const url = document.getElementById("url-input").value.trim();
+    if (!url) { alert("Please enter a URL first"); return; }
+
+    document.getElementById("spinner").style.display = "inline-block";
+    document.getElementById("fetch-btn").disabled    = true;
+    document.getElementById("fetch-error").style.display = "none";
+
+    try {
+      const resp = await fetch("/api/screenshot?url=" + encodeURIComponent(url));
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+
+      img.src = "data:image/png;base64," + data.image;
+      await new Promise(res => { img.onload = res; });
+
+      imgNaturalW = img.naturalWidth;
+      imgNaturalH = img.naturalHeight;
+
+      container.style.display = "inline-block";
+
+      // If editing, draw existing clip region immediately
+      if (clipLocked && selW > 0) {
+        drawSelection(); updateHidden();
+      } else {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        clipInfo.textContent = "Drag a rectangle over the area you want to monitor";
       }
+
+    } catch(err) {
+      document.getElementById("fetch-error").textContent = err.message || "Screenshot failed";
+      document.getElementById("fetch-error").style.display = "block";
+    } finally {
+      document.getElementById("spinner").style.display = "none";
+      document.getElementById("fetch-btn").disabled    = false;
     }
-    function onSchedChange(v) {
-      document.getElementById('interval-section').style.display =
-        v === 'interval' ? 'block' : 'none';
-      document.getElementById('timewindow-section').style.display =
-        v === 'time_window' ? 'block' : 'none';
-    }
-    function toggleSection(bodyId, arrowId) {
-      var body  = document.getElementById(bodyId);
-      var arrow = document.getElementById(arrowId);
-      var open  = body.classList.toggle('open');
-      arrow.textContent = open ? '\u25be' : '\u25b8';
-    }
-    // Init on load
-    onModeChange(document.getElementById('mode-select').value);
-    onSchedChange(document.getElementById('sched-select').value);
+  }
+
+  // Redraw on window resize (keeps canvas aligned with scaled image)
+  window.addEventListener("resize", () => { if (selW > 0) drawSelection(); });
   </script>
 </body>
 </html>
