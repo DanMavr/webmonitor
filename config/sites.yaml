@@ -1,61 +1,22 @@
+# sites.yaml — WebMonitor configuration
+#
+# Each site needs only 4 things:
+#   name, url, clip (set via dashboard), schedule_minutes
+#
+# mode: screenshot  (default) — uses Playwright + EasyOCR
+# mode: json_api              — direct JSON field comparison (for APIs like LSE)
+#
+# clip: set this via the dashboard Add/Edit form (drag-to-select).
+#       If omitted, the full page is monitored.
+
 sites:
 
-  # ── Petromatad ──────────────────────────────────────────────────────────────
-  - name: "Petromatad"
-    url: "https://www.petromatadgroup.com"
-    mode: whole_site
-    schedule_type: interval
-    interval_minutes: 720
-    javascript: true
-    js_wait_seconds: 10
-    notify:
-      - telegram
-    crawl:
-      use_sitemap: true
-      max_pages: 60
-      stay_on_domain: true
-      exclude_patterns:
-        - "/login"
-        - "/logout"
-        - "/search"
-        - "/tag/"
-        - "/page/"
-        - "/wp-json"
-        - "/feed"
-        - "/cart"
-        - "/account"
-        - "/about-us"
-        - "/corporate"
-        - "/mongolia"
-        - "/operations"
-        - "/contact"
-        - "/blockxx_psc"
-        - "/author/"
-        - "/category/"
-        - ".pdf"
-        - ".jpg"
-        - ".jpeg"
-        - ".png"
-        - ".gif"
-        - ".zip"
-        - ".doc"
-        - ".docx"
-        - ".xls"
-        - ".xlsx"
-    min_content_words: 20
-    min_change_percent: 1
-
- # ── LSE RNS ─────────────────────────────────────────────────────────────────
-  # Polls the LSE JSON API directly — no Selenium needed.
-  # Watches only idnews, subjectnews, datelastnews for clean RNS detection.
-  # Checks every 1 minute during market hours mon-fri 06:55-17:00 London time.
+  # ── LSE RNS — keep as JSON API (runs every 1 min, no screenshot needed) ───
   - name: "LSE - RNS"
     url: "https://api.londonstockexchange.com/api/gw/lse/instruments/alldata/MATD"
     mode: json_api
     schedule_type: time_window
     timezone: Europe/London
-    notify:
-      - telegram
     json_fields:
       - idnews
       - subjectnews
@@ -65,129 +26,78 @@ sites:
         from: '06:55'
         to: '17:00'
         interval_minutes: 1
-    min_change_percent: 0.0
+    notify: [telegram]
 
-  # ── Envoi ────────────────────────────────────────────────────────────────────
+  # ── Screenshot sites — set clip via dashboard ─────────────────────────────
+  - name: "Petromatad"
+    url: "https://www.petromatadgroup.com/news"
+    mode: screenshot
+    clip: {x: 0, y: 200, width: 1280, height: 1200}   # ← update via dashboard
+    ocr_languages: [en]
+    js_wait: 3.0
+    interval_minutes: 720
+    notify: [telegram]
+
   - name: "Envoi"
     url: "https://envoi.co.uk/projects/active-projects/asia/mongolia/"
-    mode: single_page
-    schedule_type: interval
+    mode: screenshot
+    clip: {x: 0, y: 200, width: 1280, height: 1400}   # ← update via dashboard
+    ocr_languages: [en]
+    js_wait: 2.0
     interval_minutes: 360
-    notify:
-      - telegram
-    crawl:
-      use_sitemap: true
-      max_pages: 40
-      stay_on_domain: true
-      exclude_patterns:
-        - "/login"
-        - "/search"
-        - ".pdf"
-        - ".jpg"
-        - ".png"
-    min_content_words: 50
-    min_change_percent: 3
+    notify: [telegram]
 
-  # ── Mongolia Energy Ministry ─────────────────────────────────────────────────
   - name: "Mongolia Energy Ministry"
     url: "https://energy.gov.mn/home"
+    mode: screenshot
     ssl_verify: false
-    mode: whole_site
-    schedule_type: interval
+    clip: {x: 0, y: 450, width: 1280, height: 900}    # ← skips rotating hero banner
+    ocr_languages: [en, ru]                             # ru covers Mongolian Cyrillic
+    js_wait: 3.0
     interval_minutes: 720
-    notify:
-      - telegram
-    crawl:
-      use_sitemap: true
-      max_pages: 40
-      stay_on_domain: true
-      exclude_patterns:
-        - "/login"
-        - "/search"
-        - ".pdf"
-        - ".jpg"
-        - ".png"
-    min_content_words: 30
-    min_change_percent: 3
+    notify: [telegram]
 
-  # ── Sunsteppe ────────────────────────────────────────────────────────────────
   - name: "Sunsteppe"
-    url: "https://www.sunsteppe.com"
-    mode: whole_site
-    schedule_type: interval
+    url: "https://www.sunsteppe.com/news"
+    mode: screenshot
+    clip: {x: 0, y: 180, width: 1280, height: 1000}   # ← update via dashboard
+    ocr_languages: [en]
+    js_wait: 2.0
     interval_minutes: 720
-    notify:
-      - telegram
-    crawl:
-      use_sitemap: true
-      max_pages: 30
-      stay_on_domain: true
-      exclude_patterns:
-        - "/login"
-        - "/search"
-        - ".pdf"
-        - ".jpg"
-        - ".png"
-    min_content_words: 50
-    min_change_percent: 3
+    notify: [telegram]
 
-  # ── EBRD ─────────────────────────────────────────────────────────────────────
-  # Previously used a #fragment URL which requests cannot follow.
-  # Now points to the stable project search page for Mongolia energy projects.
   - name: "EBRD - Mongolia Energy"
     url: "https://www.ebrd.com/home/what-we-do/projects.html?1=1&filterCountry=Mongolia&filterSector=Energy#customtab-70eec7766a-item-4654c5d413-tab"
-    mode: single_page
-    schedule_type: interval
+    mode: screenshot
+    clip: {x: 80, y: 300, width: 1100, height: 800}   # ← update via dashboard
+    ocr_languages: [en]
+    js_wait: 5.0                                        # extra wait for tab to render
     interval_minutes: 720
-    notify:
-      - telegram
-    min_content_words: 50
-    min_change_percent: 2
+    notify: [telegram]
 
-  # ── EIB ──────────────────────────────────────────────────────────────────────
-  # Previously used an unstable pageable query URL.
-  # Now points to the stable project search filtered to Mongolia.
   - name: "EIB - Mongolia"
     url: "https://www.eib.org/en/projects/loans/index.htm?q=mongolia&sortColumn=statusDate&sortDir=desc"
-    mode: single_page
-    schedule_type: interval
+    mode: screenshot
+    clip: {x: 0, y: 250, width: 1280, height: 900}    # ← update via dashboard
+    ocr_languages: [en]
+    js_wait: 4.0
     interval_minutes: 720
-    notify:
-      - telegram
-    min_content_words: 50
-    min_change_percent: 2
+    notify: [telegram]
 
-  # ── GCF ──────────────────────────────────────────────────────────────────────
   - name: "GCF - Mongolia"
     url: "https://www.greenclimate.fund/projects/"
-    mode: single_page
-    schedule_type: interval
+    mode: screenshot
+    clip: {x: 0, y: 300, width: 1280, height: 900}    # ← update via dashboard (clip below result count)
+    ocr_languages: [en]
+    js_wait: 5.0
     interval_minutes: 720
-    javascript: true
-    js_wait_seconds: 6
-    notify:
-      - telegram
-    min_change_percent: 2
+    notify: [telegram]
 
-  # ── Capital Markets Mongolia ──────────────────────────────────────────────────
   - name: "Capital Markets Mongolia"
     url: "https://capitalmarkets.mn/projects?tabValue=energy"
-    mode: whole_site
-    schedule_type: interval
+    mode: screenshot
+    clip: {x: 0, y: 200, width: 1280, height: 1000}   # ← update via dashboard
+    ocr_languages: [en, ru]
+    js_wait: 4.0
     interval_minutes: 360
-    notify:
-      - telegram
-    crawl:
-      use_sitemap: true
-      max_pages: 40
-      stay_on_domain: true
-      exclude_patterns:
-        - "/login"
-        - "/search"
-        - "/tag/"
-        - "/page/"
-        - ".pdf"
-        - ".jpg"
-        - ".png"
-    min_content_words: 50
-    min_change_percent: 3
+    notify: [telegram]
