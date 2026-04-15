@@ -1,10 +1,11 @@
-cat > monitor/capture.py << 'CAPTURE_EOF'
 """
-capture.py — screenshot using Selenium + system Chromium.
+capture.py — full-page screenshot using Selenium + system Chromium.
+
+System requirements:
+  sudo apt install chromium-browser chromium-driver
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from io import BytesIO
@@ -15,42 +16,28 @@ from PIL import Image
 
 logger = logging.getLogger("monitor")
 
-SYSTEM_CHROMIUM_PATHS = [
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-    "/snap/bin/chromium",
-]
+_CHROMIUM  = ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/snap/bin/chromium"]
+_CDRIVERS  = ["/usr/bin/chromedriver", "/usr/lib/chromium-browser/chromedriver",
+              "/usr/lib/chromium/chromedriver"]
 
-SYSTEM_CHROMEDRIVER_PATHS = [
-    "/usr/bin/chromedriver",
-    "/usr/lib/chromium-browser/chromedriver",
-    "/usr/lib/chromium/chromedriver",
-]
-
+# Common cookie-banner "accept" selectors tried in order
 _COOKIE_SELECTORS = [
+    "#onetrust-accept-btn-handler",
+    ".cc-accept",
     "button[id*='accept']",
     "button[class*='accept']",
     "button[aria-label*='accept' i]",
     "button[aria-label*='agree' i]",
-    "a[id*='accept']",
-    "a[class*='accept']",
     "[id*='cookie'] button",
-    "[class*='cookie'] button",
     "[id*='consent'] button",
-    "[class*='consent'] button",
     "[id*='gdpr'] button",
     "button[class*='CybotCookiebotDialogBodyButton']",
-    "#onetrust-accept-btn-handler",
-    ".cc-accept",
     "button[data-testid*='accept']",
 ]
 
 
-def _find(paths: list[str]) -> Optional[str]:
-    for p in paths:
-        if Path(p).exists():
-            return p
-    return None
+def _find(paths: list) -> Optional[str]:
+    return next((p for p in paths if Path(p).exists()), None)
 
 
 def _make_driver():
@@ -59,69 +46,64 @@ def _make_driver():
     from selenium.webdriver.chrome.service import Service
 
     opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1280,900")
+    for arg in ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+                "--disable-gpu", "--window-size=1280,900",
+                "--ignore-certificate-errors"]:
+        opts.add_argument(arg)
     opts.add_argument(
-        "--user-agent=Mozilla/5.0 (X11; Linux armv7l) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "--user-agent=Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
-    opts.add_argument("--ignore-certificate-errors")
-
-    chromium = _find(SYSTEM_CHROMIUM_PATHS)
+    chromium = _find(_CHROMIUM)
     if chromium:
         opts.binary_location = chromium
-        logger.info(f"Chromium: {chromium}")
-
-    chromedriver = _find(SYSTEM_CHROMEDRIVER_PATHS)
-    service = Service(executable_path=chromedriver) if chromedriver else Service()
-    if chromedriver:
-        logger.info(f"chromedriver: {chromedriver}")
-
+    driver_path = _find(_CDRIVERS)
+    service = Service(executable_path=driver_path) if driver_path else Service()
     return webdriver.Chrome(service=service, options=opts)
 
 
 def _dismiss_cookies(driver) -> None:
     from selenium.webdriver.common.by import By
-    for selector in _COOKIE_SELECTORS:
+    for sel in _COOKIE_SELECTORS:
         try:
-            els = driver.find_elements(By.CSS_SELECTOR, selector)
-            for el in els:
+            for el in driver.find_elements(By.CSS_SELECTOR, sel):
                 if el.is_displayed() and el.is_enabled():
                     driver.execute_script("arguments[0].click();", el)
-                    logger.info(f"Cookie banner dismissed via: {selector}")
+                    logger.info(f"Cookie banner dismissed: {sel}")
                     time.sleep(0.5)
                     return
         except Exception:
             continue
 
 
-def _full_page_screenshot(driver) -> bytes:
-    total_height = driver.execute_script(
-        "return Math.max(document.body.scrollHeight, "
-        "document.documentElement.scrollHeight, "
-        "document.body.offsetHeight, "
+def _full_page_png(driver) -> bytes:
+    """Resize window to full page height, screenshot, restore."""
+    h = driver.execute_script(
+        "return Math.max(document.body.scrollHeight,"
+        "document.documentElement.scrollHeight,"
+        "document.body.offsetHeight,"
         "document.documentElement.offsetHeight);"
     )
-    total_width = driver.execute_script(
-        "return Math.max(document.body.scrollWidth, "
-        "document.documentElement.scrollWidth, "
-        "document.body.offsetWidth, "
+    w = driver.execute_script(
+        "return Math.max(document.body.scrollWidth,"
+        "document.documentElement.scrollWidth,"
+        "document.body.offsetWidth,"
         "document.documentElement.offsetWidth);"
     )
-    total_height = min(int(total_height), 15000)
-    total_width  = min(int(total_width),  1920)
-    driver.set_window_size(total_width, total_height)
+    driver.set_window_size(min(int(w), 1920), min(int(h), 15000))
     time.sleep(0.3)
     png = driver.get_screenshot_as_png()
     driver.set_window_size(1280, 900)
     return png
 
 
-def _capture(url: str, clip: Optional[dict], js_wait: float) -> Optional[bytes]:
+def take_screenshot(url: str, clip: Optional[dict] = None,
+                    js_wait: float = 3.0) -> Optional[bytes]:
+    """
+    Navigate to url, wait js_wait seconds, dismiss cookie banners,
+    take a full-page screenshot, optionally crop to clip region.
+    Returns PNG bytes or None on failure.
+    """
     driver = None
     try:
         driver = _make_driver()
@@ -130,13 +112,13 @@ def _capture(url: str, clip: Optional[dict], js_wait: float) -> Optional[bytes]:
         time.sleep(js_wait)
         _dismiss_cookies(driver)
         time.sleep(0.5)
-        png = _full_page_screenshot(driver)
+        png = _full_page_png(driver)
         if clip:
             img = Image.open(BytesIO(png)).convert("RGB")
             x, y, w, h = int(clip["x"]), int(clip["y"]), int(clip["width"]), int(clip["height"])
-            img = img.crop((x, y, x + w, y + h))
+            cropped = img.crop((x, y, x + w, y + h))
             buf = BytesIO()
-            img.save(buf, format="PNG")
+            cropped.save(buf, format="PNG")
             return buf.getvalue()
         return png
     except Exception as e:
@@ -150,11 +132,5 @@ def _capture(url: str, clip: Optional[dict], js_wait: float) -> Optional[bytes]:
                 pass
 
 
-async def take_screenshot(url: str, clip: Optional[dict], js_wait: float = 3.0) -> Optional[bytes]:
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _capture, url, clip, js_wait)
-
-
-def take_screenshot_sync(url: str, clip: Optional[dict], js_wait: float = 3.0) -> Optional[bytes]:
-    return _capture(url, clip, js_wait)
-CAPTURE_EOF
+# Alias for compatibility — Flask and core both call the same function
+take_screenshot_sync = take_screenshot
