@@ -1,20 +1,15 @@
 """
-core.py — main check loop.
+core.py — site check logic.
 
-For each site:
-  1. Take a clipped screenshot (Playwright)
-  2. OCR the screenshot (EasyOCR)
-  3. Diff against stored baseline text
-  4. If changed → notify + save new screenshot as baseline
-  5. If first run → save as baseline, no notification
-
-mode: json_api — bypass screenshot/OCR, compare JSON fields directly (e.g. LSE RNS)
+Two modes:
+  screenshot  — Selenium screenshot → OCR → diff → notify
+  json_api    — HTTP GET JSON → field extraction → diff → notify
 """
 from __future__ import annotations
 
 import json
 import logging
-import aiohttp
+import requests
 
 from monitor.capture  import take_screenshot
 from monitor.ocr      import extract_text
@@ -25,34 +20,32 @@ from monitor.notify   import send_change_alert, send_error_alert
 logger = logging.getLogger("monitor")
 
 
-# ── JSON API check ────────────────────────────────────────────────────────────
-
-async def check_json_api(site: dict):
+def check_json_api(site: dict):
     name   = site["name"]
     url    = site["url"]
     fields = site.get("json_fields", [])
 
     logger.info(f"Checking JSON API: {name}")
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                data = await resp.json(content_type=None)
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
     except Exception as e:
-        logger.error(f"{name}: JSON fetch failed — {e}")
+        logger.error(f"{name}: fetch failed — {e}")
         log_job(name, "error", str(e))
         return
 
     def _flatten(obj, prefix=""):
-        items = {}
+        out = {}
         if isinstance(obj, dict):
             for k, v in obj.items():
-                items.update(_flatten(v, f"{prefix}{k}."))
+                out.update(_flatten(v, f"{prefix}{k}."))
         elif isinstance(obj, list):
             for i, v in enumerate(obj):
-                items.update(_flatten(v, f"{prefix}{i}."))
+                out.update(_flatten(v, f"{prefix}{i}."))
         else:
-            items[prefix.rstrip(".")] = obj
-        return items
+            out[prefix.rstrip(".")] = obj
+        return out
 
     flat = _flatten(data)
     if fields:
@@ -64,7 +57,7 @@ async def check_json_api(site: dict):
 
     if not baseline_text:
         save_baseline(name, b"", current_text)
-        logger.info(f"{name}: JSON baseline saved")
+        logger.info(f"{name}: baseline saved")
         log_job(name, "success", "baseline saved")
         return
 
@@ -73,27 +66,23 @@ async def check_json_api(site: dict):
         log_job(name, "success", "no change")
         return
 
-    old = json.loads(baseline_text)
-    new = json.loads(current_text)
-    added   = [f"{k}: {new[k]}" for k in new if old.get(k) != new[k]]
-    removed = [f"{k}: {old[k]}" for k in old if k not in new]
+    old  = json.loads(baseline_text)
+    new  = json.loads(current_text)
     diff = {
         "changed": True,
-        "added":   added,
-        "removed": removed,
-        "summary": f"{len(added)} fields changed",
+        "added":   [f"{k}: {new[k]}" for k in new if old.get(k) != new[k]],
+        "removed": [f"{k}: {old[k]}" for k in old if k not in new],
+        "summary": "",
     }
-
-    logger.info(f"{name}: JSON change — {diff['summary']}")
-    await send_change_alert(name, diff, png_bytes=None)
+    diff["summary"] = f"{len(diff['added'])} fields changed"
+    logger.info(f"{name}: change — {diff['summary']}")
+    send_change_alert(name, diff, png_bytes=None)
     save_baseline(name, b"", current_text)
     log_change(name, diff)
     log_job(name, "success", diff["summary"])
 
 
-# ── Screenshot + OCR check ────────────────────────────────────────────────────
-
-async def check_screenshot_site(site: dict):
+def check_screenshot_site(site: dict):
     name      = site["name"]
     url       = site["url"]
     clip      = site.get("clip")
@@ -101,48 +90,44 @@ async def check_screenshot_site(site: dict):
     js_wait   = float(site.get("js_wait", 3.0))
     min_conf  = float(site.get("ocr_min_confidence", 0.4))
 
-    logger.info(f"Checking: {name}  url={url}  clip={clip}")
+    logger.info(f"Checking: {name}")
 
-    png = await take_screenshot(url, clip, js_wait)
+    png = take_screenshot(url, clip, js_wait)
     if not png:
-        msg = "Screenshot failed (browser error or timeout)"
+        msg = "Screenshot failed"
         logger.error(f"{name}: {msg}")
-        await send_error_alert(name, msg)
+        send_error_alert(name, msg)
         log_job(name, "error", msg)
         return
 
-    current_text = extract_text(png, languages, min_confidence=min_conf)
-    if not current_text.strip():
-        logger.warning(f"{name}: OCR returned empty text — skipping")
-        log_job(name, "error", "OCR returned empty text")
-        return
-
+    current_text = extract_text(png, languages, min_conf)
     _, baseline_text = load_baseline(name)
 
     if not baseline_text:
         save_baseline(name, png, current_text)
-        logger.info(f"{name}: baseline saved ({len(current_text.splitlines())} OCR lines)")
+        logger.info(f"{name}: baseline saved")
         log_job(name, "success", "baseline saved")
         return
 
     diff = compute_diff(baseline_text, current_text)
-
     if not diff["changed"]:
         logger.info(f"{name}: no change")
         log_job(name, "success", "no change")
         return
 
     logger.info(f"{name}: change detected — {diff['summary']}")
-    await send_change_alert(name, diff, png_bytes=png)
+    send_change_alert(name, diff, png_bytes=png)
     save_baseline(name, png, current_text)
     log_change(name, diff)
     log_job(name, "success", diff["summary"])
 
 
-# ── Dispatcher ────────────────────────────────────────────────────────────────
-
-async def check_site(site: dict):
-    if site.get("mode") == "json_api":
-        await check_json_api(site)
-    else:
-        await check_screenshot_site(site)
+def check_site(site: dict):
+    """Main entry point called by scheduler and cmd_check."""
+    try:
+        if site.get("mode") == "json_api":
+            check_json_api(site)
+        else:
+            check_screenshot_site(site)
+    except Exception as e:
+        logger.error(f"Unhandled error checking [{site.get('name')}]: {e}", exc_info=True)
