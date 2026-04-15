@@ -3,49 +3,52 @@ capture.py — screenshot capture using Playwright with system Chromium fallback
 
 Playwright on Raspberry Pi (ARM64):
   pip install playwright
-  playwright install chromium
-  playwright install-deps chromium     # run as sudo if needed
+  playwright install chromium          # downloads ARM64 Chromium build
+  playwright install-deps chromium     # installs system dependencies
 
-If Playwright's bundled Chromium fails on your system, set in .env:
+If Playwright's bundled Chromium fails on your system, set env var:
   USE_SYSTEM_CHROMIUM=1
-Then install system Chromium:
+This makes Playwright use the system-installed Chromium:
   sudo apt install chromium-browser    # Raspberry Pi OS / Debian
 """
-from __future__ import annotations
 
 import os
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("monitor")
 
+# Detect whether to force system Chromium (e.g. on Raspberry Pi if bundled fails)
 USE_SYSTEM_CHROMIUM = os.getenv("USE_SYSTEM_CHROMIUM", "0") == "1"
 
+# Common system Chromium paths on Raspberry Pi OS / Debian / Ubuntu ARM
 SYSTEM_CHROMIUM_PATHS = [
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-    "/snap/bin/chromium",
+    "/usr/bin/chromium-browser",    # Raspberry Pi OS / Ubuntu
+    "/usr/bin/chromium",            # Debian
+    "/snap/bin/chromium",           # Snap install
 ]
 
 
-def _find_system_chromium() -> Optional[str]:
+def _find_system_chromium() -> str | None:
     for path in SYSTEM_CHROMIUM_PATHS:
         if Path(path).exists():
             return path
     return None
 
 
-async def take_screenshot(url: str, clip: Optional[dict], js_wait: float = 3.0) -> Optional[bytes]:
+async def take_screenshot(url: str, clip: dict | None, js_wait: float = 3.0) -> bytes | None:
     """
-    Navigate to url, wait for the page to settle, return a PNG screenshot as bytes.
-    clip — dict with keys x, y, width, height. If None, full-page screenshot is taken.
+    Navigate to url using a headless Chromium browser, wait for the page to
+    settle, then return a PNG screenshot as bytes.
+
+    clip  — optional dict with keys x, y, width, height (page coordinates).
+            If None, a full-page screenshot is taken (used for setup/preview).
     """
     try:
         from playwright.async_api import async_playwright
 
-        launch_kwargs: dict = {
+        launch_kwargs = {
             "args": [
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
@@ -77,6 +80,7 @@ async def take_screenshot(url: str, clip: Optional[dict], js_wait: float = 3.0) 
             try:
                 await page.goto(url, wait_until="networkidle", timeout=30_000)
             except Exception:
+                # networkidle can time out on heavy SPAs; fall back to load
                 try:
                     await page.goto(url, wait_until="load", timeout=30_000)
                     await asyncio.sleep(js_wait)
@@ -85,9 +89,10 @@ async def take_screenshot(url: str, clip: Optional[dict], js_wait: float = 3.0) 
                     await browser.close()
                     return None
 
+            # Extra wait for JS-heavy pages (React hydration etc.)
             await asyncio.sleep(js_wait)
 
-            screenshot_kwargs: dict = {"full_page": clip is None}
+            screenshot_kwargs = {"full_page": clip is None}
             if clip:
                 screenshot_kwargs["clip"] = clip
                 screenshot_kwargs["full_page"] = False
@@ -101,6 +106,6 @@ async def take_screenshot(url: str, clip: Optional[dict], js_wait: float = 3.0) 
         return None
 
 
-def take_screenshot_sync(url: str, clip: Optional[dict], js_wait: float = 3.0) -> Optional[bytes]:
-    """Synchronous wrapper — safe to call from Flask routes (non-async context)."""
+def take_screenshot_sync(url: str, clip: dict | None, js_wait: float = 3.0) -> bytes | None:
+    """Synchronous wrapper for use in Flask routes (non-async context)."""
     return asyncio.run(take_screenshot(url, clip, js_wait))
