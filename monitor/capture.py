@@ -1,111 +1,112 @@
 """
-capture.py — screenshot capture using Playwright with system Chromium fallback.
+capture.py — screenshot using Selenium + system Chromium.
 
-Playwright on Raspberry Pi (ARM64):
-  pip install playwright
-  playwright install chromium          # downloads ARM64 Chromium build
-  playwright install-deps chromium     # installs system dependencies
+No playwright needed.
 
-If Playwright's bundled Chromium fails on your system, set env var:
-  USE_SYSTEM_CHROMIUM=1
-This makes Playwright use the system-installed Chromium:
-  sudo apt install chromium-browser    # Raspberry Pi OS / Debian
+Requirements (system):
+  sudo apt install chromium-browser chromium-driver
+
+Requirements (Python — already in venv):
+  selenium
 """
+from __future__ import annotations
 
-import os
 import asyncio
 import logging
+import time
+from io import BytesIO
 from pathlib import Path
+from typing import Optional
+
+from PIL import Image
 
 logger = logging.getLogger("monitor")
 
-# Detect whether to force system Chromium (e.g. on Raspberry Pi if bundled fails)
-USE_SYSTEM_CHROMIUM = os.getenv("USE_SYSTEM_CHROMIUM", "0") == "1"
-
-# Common system Chromium paths on Raspberry Pi OS / Debian / Ubuntu ARM
 SYSTEM_CHROMIUM_PATHS = [
-    "/usr/bin/chromium-browser",    # Raspberry Pi OS / Ubuntu
-    "/usr/bin/chromium",            # Debian
-    "/snap/bin/chromium",           # Snap install
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+    "/snap/bin/chromium",
+]
+
+SYSTEM_CHROMEDRIVER_PATHS = [
+    "/usr/bin/chromedriver",
+    "/usr/lib/chromium-browser/chromedriver",
+    "/usr/lib/chromium/chromedriver",
 ]
 
 
-def _find_system_chromium() -> str | None:
-    for path in SYSTEM_CHROMIUM_PATHS:
-        if Path(path).exists():
-            return path
+def _find(paths: list[str]) -> Optional[str]:
+    for p in paths:
+        if Path(p).exists():
+            return p
     return None
 
 
-async def take_screenshot(url: str, clip: dict | None, js_wait: float = 3.0) -> bytes | None:
-    """
-    Navigate to url using a headless Chromium browser, wait for the page to
-    settle, then return a PNG screenshot as bytes.
+def _make_driver():
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
 
-    clip  — optional dict with keys x, y, width, height (page coordinates).
-            If None, a full-page screenshot is taken (used for setup/preview).
-    """
+    opts = Options()
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--window-size=1280,900")
+    opts.add_argument(
+        "--user-agent=Mozilla/5.0 (X11; Linux armv7l) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+    opts.add_argument("--ignore-certificate-errors")
+
+    chromium = _find(SYSTEM_CHROMIUM_PATHS)
+    if chromium:
+        opts.binary_location = chromium
+        logger.info(f"Chromium: {chromium}")
+
+    chromedriver = _find(SYSTEM_CHROMEDRIVER_PATHS)
+    service = Service(executable_path=chromedriver) if chromedriver else Service()
+    if chromedriver:
+        logger.info(f"chromedriver: {chromedriver}")
+
+    return webdriver.Chrome(service=service, options=opts)
+
+
+def _capture(url: str, clip: Optional[dict], js_wait: float) -> Optional[bytes]:
+    """Blocking implementation — runs in a thread."""
+    driver = None
     try:
-        from playwright.async_api import async_playwright
-
-        launch_kwargs = {
-            "args": [
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ]
-        }
-
-        if USE_SYSTEM_CHROMIUM:
-            chromium_path = _find_system_chromium()
-            if chromium_path:
-                launch_kwargs["executable_path"] = chromium_path
-                logger.info(f"Using system Chromium: {chromium_path}")
-            else:
-                logger.warning("USE_SYSTEM_CHROMIUM set but no system Chromium found — using bundled")
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(**launch_kwargs)
-            context = await browser.new_context(
-                viewport={"width": 1280, "height": 900},
-                user_agent=(
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                ),
-                ignore_https_errors=True,
-            )
-            page = await context.new_page()
-
-            try:
-                await page.goto(url, wait_until="networkidle", timeout=30_000)
-            except Exception:
-                # networkidle can time out on heavy SPAs; fall back to load
-                try:
-                    await page.goto(url, wait_until="load", timeout=30_000)
-                    await asyncio.sleep(js_wait)
-                except Exception as e:
-                    logger.error(f"Navigation failed for {url}: {e}")
-                    await browser.close()
-                    return None
-
-            # Extra wait for JS-heavy pages (React hydration etc.)
-            await asyncio.sleep(js_wait)
-
-            screenshot_kwargs = {"full_page": clip is None}
-            if clip:
-                screenshot_kwargs["clip"] = clip
-                screenshot_kwargs["full_page"] = False
-
-            png = await page.screenshot(**screenshot_kwargs)
-            await browser.close()
-            return png
-
+        driver = _make_driver()
+        driver.set_page_load_timeout(30)
+        driver.get(url)
+        time.sleep(js_wait)
+        png = driver.get_screenshot_as_png()
+        if clip:
+            img = Image.open(BytesIO(png)).convert("RGB")
+            x, y, w, h = int(clip["x"]), int(clip["y"]), int(clip["width"]), int(clip["height"])
+            img = img.crop((x, y, x + w, y + h))
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+        return png
     except Exception as e:
         logger.error(f"Screenshot failed for {url}: {e}")
         return None
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
 
-def take_screenshot_sync(url: str, clip: dict | None, js_wait: float = 3.0) -> bytes | None:
-    """Synchronous wrapper for use in Flask routes (non-async context)."""
-    return asyncio.run(take_screenshot(url, clip, js_wait))
+async def take_screenshot(url: str, clip: Optional[dict], js_wait: float = 3.0) -> Optional[bytes]:
+    """Async entry point — used by core.py. Runs Selenium in a thread executor."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _capture, url, clip, js_wait)
+
+
+def take_screenshot_sync(url: str, clip: Optional[dict], js_wait: float = 3.0) -> Optional[bytes]:
+    """Sync entry point — used by Flask dashboard (app.py)."""
+    return _capture(url, clip, js_wait)
