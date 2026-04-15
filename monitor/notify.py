@@ -1,10 +1,14 @@
 """
 notify.py — Telegram notifications with optional screenshot attachment.
+
+All public functions are async — await them directly from core.py.
 """
+from __future__ import annotations
 
 import os
 import logging
-import asyncio
+from typing import Optional
+
 from telegram import Bot
 from telegram.error import TelegramError
 
@@ -37,7 +41,7 @@ async def _send_photo(png_bytes: bytes, caption: str) -> bool:
         await bot.send_photo(
             chat_id=TELEGRAM_CHAT_ID,
             photo=png_bytes,
-            caption=caption,
+            caption=caption[:1024],
             parse_mode="HTML",
         )
         return True
@@ -46,10 +50,8 @@ async def _send_photo(png_bytes: bytes, caption: str) -> bool:
         return False
 
 
-def send_change_alert(site_name: str, diff: dict, png_bytes: bytes | None = None):
-    """
-    Send a change-detected alert. Attaches the new screenshot if available.
-    """
+async def send_change_alert(site_name: str, diff: dict, png_bytes: Optional[bytes] = None):
+    """Send a change-detected alert. Attaches the new screenshot if available."""
     if not _check_creds():
         return
 
@@ -66,21 +68,15 @@ def send_change_alert(site_name: str, diff: dict, png_bytes: bytes | None = None
 
     message = "\n".join(lines)
 
-    async def _send():
-        if png_bytes:
-            # Try photo with caption; fall back to text-only if image too large
-            try:
-                await _send_photo(png_bytes, caption=message[:1024])
-                return
-            except Exception:
-                pass
-        await _send_text(message)
-
-    asyncio.run(_send())
+    if png_bytes:
+        success = await _send_photo(png_bytes, caption=message)
+        if success:
+            return
+    await _send_text(message)
 
 
-def send_error_alert(site_name: str, error: str):
+async def send_error_alert(site_name: str, error: str):
     if not _check_creds():
         return
-    msg = f"\u274c <b>{site_name}</b> — check failed\n<code>{error}</code>"
-    asyncio.run(_send_text(msg))
+    msg = f"\u274c <b>{site_name}</b> — check failed\n<code>{error[:500]}</code>"
+    await _send_text(msg)
