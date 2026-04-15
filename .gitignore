@@ -1,6 +1,6 @@
-# Never upload these to GitHub
 .env
 data/
+venv/
 *.db
 *.log
 __pycache__/
