@@ -1,13 +1,6 @@
+cat > monitor/capture.py << 'CAPTURE_EOF'
 """
 capture.py — screenshot using Selenium + system Chromium.
-
-No playwright needed.
-
-Requirements (system):
-  sudo apt install chromium-browser chromium-driver
-
-Requirements (Python — already in venv):
-  selenium
 """
 from __future__ import annotations
 
@@ -32,6 +25,24 @@ SYSTEM_CHROMEDRIVER_PATHS = [
     "/usr/bin/chromedriver",
     "/usr/lib/chromium-browser/chromedriver",
     "/usr/lib/chromium/chromedriver",
+]
+
+_COOKIE_SELECTORS = [
+    "button[id*='accept']",
+    "button[class*='accept']",
+    "button[aria-label*='accept' i]",
+    "button[aria-label*='agree' i]",
+    "a[id*='accept']",
+    "a[class*='accept']",
+    "[id*='cookie'] button",
+    "[class*='cookie'] button",
+    "[id*='consent'] button",
+    "[class*='consent'] button",
+    "[id*='gdpr'] button",
+    "button[class*='CybotCookiebotDialogBodyButton']",
+    "#onetrust-accept-btn-handler",
+    ".cc-accept",
+    "button[data-testid*='accept']",
 ]
 
 
@@ -73,15 +84,53 @@ def _make_driver():
     return webdriver.Chrome(service=service, options=opts)
 
 
+def _dismiss_cookies(driver) -> None:
+    from selenium.webdriver.common.by import By
+    for selector in _COOKIE_SELECTORS:
+        try:
+            els = driver.find_elements(By.CSS_SELECTOR, selector)
+            for el in els:
+                if el.is_displayed() and el.is_enabled():
+                    driver.execute_script("arguments[0].click();", el)
+                    logger.info(f"Cookie banner dismissed via: {selector}")
+                    time.sleep(0.5)
+                    return
+        except Exception:
+            continue
+
+
+def _full_page_screenshot(driver) -> bytes:
+    total_height = driver.execute_script(
+        "return Math.max(document.body.scrollHeight, "
+        "document.documentElement.scrollHeight, "
+        "document.body.offsetHeight, "
+        "document.documentElement.offsetHeight);"
+    )
+    total_width = driver.execute_script(
+        "return Math.max(document.body.scrollWidth, "
+        "document.documentElement.scrollWidth, "
+        "document.body.offsetWidth, "
+        "document.documentElement.offsetWidth);"
+    )
+    total_height = min(int(total_height), 15000)
+    total_width  = min(int(total_width),  1920)
+    driver.set_window_size(total_width, total_height)
+    time.sleep(0.3)
+    png = driver.get_screenshot_as_png()
+    driver.set_window_size(1280, 900)
+    return png
+
+
 def _capture(url: str, clip: Optional[dict], js_wait: float) -> Optional[bytes]:
-    """Blocking implementation — runs in a thread."""
     driver = None
     try:
         driver = _make_driver()
         driver.set_page_load_timeout(30)
         driver.get(url)
         time.sleep(js_wait)
-        png = driver.get_screenshot_as_png()
+        _dismiss_cookies(driver)
+        time.sleep(0.5)
+        png = _full_page_screenshot(driver)
         if clip:
             img = Image.open(BytesIO(png)).convert("RGB")
             x, y, w, h = int(clip["x"]), int(clip["y"]), int(clip["width"]), int(clip["height"])
@@ -102,11 +151,10 @@ def _capture(url: str, clip: Optional[dict], js_wait: float) -> Optional[bytes]:
 
 
 async def take_screenshot(url: str, clip: Optional[dict], js_wait: float = 3.0) -> Optional[bytes]:
-    """Async entry point — used by core.py. Runs Selenium in a thread executor."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _capture, url, clip, js_wait)
 
 
 def take_screenshot_sync(url: str, clip: Optional[dict], js_wait: float = 3.0) -> Optional[bytes]:
-    """Sync entry point — used by Flask dashboard (app.py)."""
     return _capture(url, clip, js_wait)
+CAPTURE_EOF
