@@ -1,621 +1,372 @@
-from flask import Flask, render_template, send_file, redirect, url_for, jsonify, request, flash
-import sqlite3
+"""
+dashboard/app.py — Flask dashboard
+
+Routes:
+  GET  /                       — main dashboard
+  GET  /logs                   — activity log viewer
+  GET  /site/add               — add new site form
+  GET  /site/edit/<name>       — edit existing site
+  POST /site/save              — save new or edited site to sites.yaml
+  POST /site/delete/<name>     — delete site
+  POST /check-now              — trigger immediate check for all sites
+  POST /check-now/<name>       — trigger immediate check for one site
+  GET  /api/screenshot         — fetch screenshot for clip region selector
+  GET  /baseline/<name>        — serve baseline.png for a site (for inspect view)
+"""
+
+import base64
+import re
 import yaml
+import sqlite3
 import asyncio
+import threading
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-app = Flask(__name__, template_folder="../dashboard/templates")
+from flask import (
+    Flask, render_template, redirect, url_for,
+    jsonify, request, flash, send_file, Response
+)
+
+from monitor.storage  import DB, get_recent_changes, get_site_stats, get_baseline_png_path
+from monitor.capture  import take_screenshot_sync
+
+app = Flask(__name__, template_folder="templates")
 app.secret_key = "webmonitor-secret-key-change-me"
-from monitor.storage import DB  # single source of truth for DB path
-CONFIG = "config/sites.yaml"
-DISPLAY_TZ = ZoneInfo("Europe/Prague")
+
+CONFIG      = "config/sites.yaml"
+DISPLAY_TZ  = ZoneInfo("Europe/London")
+
+# Shared scheduler reference (set by run.py after scheduler is built)
+_scheduler = None
+
+def set_scheduler(s):
+    global _scheduler
+    _scheduler = s
 
 
-def format_timestamp(ts: str) -> str:
-    """Convert a UTC timestamp string to Prague local time for display."""
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def fmt_ts(ts: str) -> str:
     if not ts:
-        return "Not yet"
+        return "Never"
     try:
-        dt = datetime.fromisoformat(ts).replace(tzinfo=ZoneInfo("UTC"))
-        return dt.astimezone(DISPLAY_TZ).strftime("%Y-%m-%d %H:%M")
+        dt = datetime.fromisoformat(ts).astimezone(DISPLAY_TZ)
+        return dt.strftime("%Y-%m-%d %H:%M")
     except Exception:
         return ts[:16]
 
 
-def get_db():
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def load_config():
+def load_sites() -> list[dict]:
     try:
         with open(CONFIG) as f:
-            return yaml.safe_load(f)["sites"]
+            return yaml.safe_load(f).get("sites", [])
     except Exception:
         return []
 
 
-def success_rate(db) -> int:
-    total = db.execute(
-        "SELECT COUNT(*) FROM job_log"
-    ).fetchone()[0]
-    if total == 0:
-        return 100
-    success = db.execute(
-        "SELECT COUNT(*) FROM job_log WHERE status='success'"
-    ).fetchone()[0]
-    return round((success / total) * 100)
-
-
-def get_schedule_label(site: dict) -> str:
-    schedule_type = site.get("schedule_type", "interval")
-    if schedule_type == "interval":
-        mins = site.get("interval_minutes", 60)
-        if mins >= 1440:
-            return f"Every {mins // 1440}d"
-        elif mins >= 60:
-            return f"Every {mins // 60}h"
-        else:
-            return f"Every {mins}min"
-    elif schedule_type == "time_window":
-        windows = site.get("windows", [])
-        parts = []
-        for w in windows:
-            parts.append(
-                f"{w.get('days','?')} "
-                f"{w.get('from','?')}-{w.get('to','?')} "
-                f"/{w.get('interval_minutes','?')}min"
-            )
-        return " | ".join(parts)
-    return "Unknown"
-
-
-@app.route("/")
-def index():
-    db = get_db()
-    config_sites = load_config()
-
-    monitored_sites = []
-    for site in config_sites:
-        name = site["name"]
-
-        last_check = db.execute("""
-            SELECT timestamp FROM job_log
-            WHERE site_name = ?
-            ORDER BY timestamp DESC LIMIT 1
-        """, (name,)).fetchone()
-
-        total_changes = db.execute(
-            "SELECT COUNT(*) FROM changes WHERE site_name = ?",
-            (name,)
-        ).fetchone()[0]
-
-        last_status = db.execute("""
-            SELECT status FROM job_log
-            WHERE site_name = ?
-            ORDER BY timestamp DESC LIMIT 1
-        """, (name,)).fetchone()
-
-        if last_status and last_status[0] == "success":
-            status = "OK"
-        elif last_status and last_status[0] == "error":
-            status = "Error"
-        else:
-            status = "Pending"
-
-        monitored_sites.append({
-            "name": name,
-            "url": site.get("url", ""),
-            "mode": site.get("mode", "single_page"),
-            "schedule": get_schedule_label(site),
-            "last_check": format_timestamp(last_check[0]) if last_check else "Not yet",
-            "total_changes": total_changes,
-            "status": status,
-        })
-
-    raw_changes = db.execute("""
-        SELECT site_name, url, change_pct, diff_text, timestamp
-        FROM changes
-        ORDER BY timestamp DESC LIMIT 100
-    """).fetchall()
-
-    changes = []
-    for c in raw_changes:
-        from urllib.parse import urlparse
-        path = urlparse(c["url"]).path or "/"
-        added = []
-        removed = []
-        if c["diff_text"]:
-            for line in c["diff_text"].splitlines():
-                if line.startswith("+") and not line.startswith("+++"):
-                    added.append(line[1:].strip())
-                elif line.startswith("-") and not line.startswith("---"):
-                    removed.append(line[1:].strip())
-        changes.append({
-            "site_name": c["site_name"],
-            "url": c["url"],
-            "short_url": path,
-            "change_pct": c["change_pct"],
-            "timestamp": format_timestamp(c["timestamp"]),
-            "added": added,
-            "removed": removed,
-        })
-
-    total_pages = db.execute(
-        "SELECT COUNT(DISTINCT url) FROM snapshots"
-    ).fetchone()[0]
-
-    stats = {
-        "total_sites": len(config_sites),
-        "total_pages": total_pages,
-        "total_changes": db.execute(
-            "SELECT COUNT(*) FROM changes"
-        ).fetchone()[0],
-        "checks_today": db.execute(
-            "SELECT COUNT(*) FROM job_log "
-            "WHERE DATE(timestamp)=DATE('now')"
-        ).fetchone()[0],
-        "success_rate": success_rate(db),
-    }
-
-    db.close()
-    return render_template(
-        "index.html",
-        monitored_sites=monitored_sites,
-        changes=changes,
-        stats=stats,
-    )
-
-
-@app.route("/check-now", methods=["POST"])
-def check_now():
-    """
-    Dispatch an immediate check for every site via the running APScheduler.
-    Returns immediately (202) — checks run in the background on the scheduler's
-    event loop, same as normal scheduled runs. Job_log and snapshots update as
-    each site finishes. The dashboard auto-reloads to show fresh timestamps.
-    """
-    config_sites = load_config()
-    dispatched = []
-    failed = []
-
-    for site in config_sites:
-        try:
-            _trigger_immediate_check(site)
-            dispatched.append(site["name"])
-        except Exception as e:
-            failed.append({"name": site["name"], "error": str(e)})
-
-    return jsonify({
-        "status": "dispatched",
-        "dispatched": dispatched,
-        "failed": failed,
-    }), 202
-
-
-@app.route("/inspect/<path:site_name>")
-def inspect_site(site_name):
-    from monitor.storage import get_baseline_summary
-
-    summary = get_baseline_summary(site_name)
-
-    if "error" in summary:
-        return render_template_string(
-            "<h2 style='color:white;font-family:sans-serif;"
-            "background:#0f172a;padding:20px'>"
-            + summary["error"] + "</h2>"
-        )
-
-    
-
-    return render_template("inspect.html", summary=summary)
-
-@app.route("/api/json-fields")
-def api_json_fields():
-    """
-    Probe a JSON API URL and return its fields with current values.
-    Used by the Add/Edit form to auto-detect monitorable fields.
-    Flattens nested JSON using dot notation.
-    """
-    import requests as _requests
-
-    url = request.args.get("url", "").strip()
-    if not url:
-        return jsonify({"error": "No URL provided"})
-
-    try:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
-            ),
-            "Accept": "application/json",
-        }
-        resp = _requests.get(url, headers=headers, timeout=15)
-        if resp.status_code != 200:
-            return jsonify({"error": f"URL returned HTTP {resp.status_code}"})
-
-        data = resp.json()
-    except ValueError:
-        return jsonify({"error": "URL did not return valid JSON"})
-    except Exception as e:
-        return jsonify({"error": f"Request failed: {e}"})
-
-    from monitor.storage import flatten
-    flat = flatten(data)
-    fields = [{"key": k, "value": str(v)} for k, v in sorted(flat.items())]
-
-    return jsonify({"fields": fields})
-
-
-@app.route("/logs")
-def view_logs():
-    import os
-    from zoneinfo import ZoneInfo
-    from datetime import datetime
-
-    log_path = "data/activity.log"
-    lines = []
-
-    if os.path.exists(log_path):
-        with open(log_path, "r") as f:
-            all_lines = f.readlines()
-        lines = all_lines[-1000:]
-
-    parsed_raw = []
-    for raw in reversed(lines):
-        raw = raw.strip()
-        if not raw:
-            continue
-
-        level = "INFO"
-        if "[ERROR]" in raw:
-            level = "ERROR"
-        elif "[WARNING]" in raw:
-            level = "WARNING"
-        elif "WATCHDOG" in raw:
-            level = "WATCHDOG"
-        elif "Change detected" in raw:
-            level = "CHANGE"
-        elif "Checking:" in raw:
-            level = "CHECKING"
-        elif "Baseline" in raw:
-            level = "BASELINE"
-        elif "JS fallback" in raw:
-            level = "JS"
-
-        try:
-            ts_str = raw[:19]
-            dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-            dt_utc = dt.replace(tzinfo=ZoneInfo("UTC"))
-            dt_local = dt_utc.astimezone(ZoneInfo("Europe/Prague"))
-            ts_display = dt_local.strftime("%Y-%m-%d %H:%M:%S")
-            message = raw[20:].strip()
-        except Exception:
-            ts_display = ""
-            message = raw
-
-        parsed_raw.append({
-            "ts": ts_display,
-            "level": level,
-            "message": message,
-        })
-
-    # Collapse consecutive identical messages into one entry with a repeat count.
-    # Eliminates walls of "Outside window: LSE - RNS" and similar repeated lines.
-    parsed = []
-    for entry in parsed_raw:
-        if (parsed
-                and parsed[-1]["message"] == entry["message"]
-                and parsed[-1]["level"] == entry["level"]):
-            parsed[-1]["count"] = parsed[-1].get("count", 1) + 1
-            parsed[-1]["ts_first"] = entry["ts"]   # earliest occurrence
-        else:
-            entry["count"] = 1
-            parsed.append(entry)
-
-    
-
-    return render_template("logs.html", lines=parsed)
-
-
-# ── YAML helpers ──────────────────────────────────────────────────────────────
-
-def load_yaml_raw() -> dict:
-    """Load the full sites.yaml as a dict, preserving structure."""
-    with open(CONFIG) as f:
-        return yaml.safe_load(f) or {"sites": []}
-
-
-def save_yaml(data: dict):
-    """Write the sites dict back to sites.yaml with clean formatting."""
+def save_sites(sites: list[dict]):
     with open(CONFIG, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        yaml.dump({"sites": sites}, f, default_flow_style=False,
+                  allow_unicode=True, sort_keys=False)
 
 
-def find_site_index(sites: list, name: str) -> int:
-    """Return the index of a site by name, or -1 if not found."""
+def find_site(sites: list, name: str) -> int:
     for i, s in enumerate(sites):
         if s.get("name") == name:
             return i
     return -1
 
 
-def form_to_site(form) -> tuple[dict | None, str]:
+# ── Main dashboard ────────────────────────────────────────────────────────────
+
+@app.route("/")
+def index():
+    sites    = load_sites()
+    changes  = get_recent_changes(100)
+
+    monitored = []
+    for site in sites:
+        stats = get_site_stats(site["name"])
+        status = "Pending"
+        if stats["last_status"] == "success":
+            status = "OK"
+        elif stats["last_status"] == "error":
+            status = "Error"
+
+        sched = site.get("schedule_type", "interval")
+        if sched == "interval":
+            m = site.get("interval_minutes", 60)
+            if m >= 1440:   label = f"Every {m//1440}d"
+            elif m >= 60:   label = f"Every {m//60}h"
+            else:           label = f"Every {m}min"
+        else:
+            windows = site.get("windows", [])
+            label   = " | ".join(
+                f"{w['days']} {w['from']}-{w['to']} /{w['interval_minutes']}min"
+                for w in windows
+            ) if windows else "time window"
+
+        clip = site.get("clip")
+        clip_label = (
+            f"{clip['width']}×{clip['height']} at ({clip['x']},{clip['y']})"
+            if clip else "Full page"
+        )
+
+        monitored.append({
+            "name":          site["name"],
+            "url":           site.get("url",""),
+            "mode":          site.get("mode","screenshot"),
+            "schedule":      label,
+            "clip":          clip_label,
+            "last_check":    fmt_ts(stats["last_check"]),
+            "total_changes": stats["total_changes"],
+            "status":        status,
+            "has_baseline":  get_baseline_png_path(site["name"]) is not None,
+        })
+
+    # Parse changes for display
+    parsed_changes = []
+    for c in changes:
+        added   = [l for l in (c.get("added")   or "").splitlines() if l.strip()]
+        removed = [l for l in (c.get("removed") or "").splitlines() if l.strip()]
+        parsed_changes.append({
+            "site_name": c["site_name"],
+            "timestamp": fmt_ts(c["timestamp"]),
+            "summary":   c.get("summary",""),
+            "added":     added[:5],
+            "removed":   removed[:3],
+        })
+
+    return render_template(
+        "index.html",
+        monitored_sites=monitored,
+        changes=parsed_changes,
+        total_sites=len(sites),
+        total_changes=len(changes),
+    )
+
+
+# ── Baseline image viewer ─────────────────────────────────────────────────────
+
+@app.route("/baseline/<path:site_name>")
+def baseline_image(site_name):
+    path = get_baseline_png_path(site_name)
+    if not path:
+        return Response("No baseline", status=404)
+    return send_file(path, mimetype="image/png")
+
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+
+@app.route("/logs")
+def view_logs():
+    log_path = Path("data/activity.log")
+    lines = []
+    if log_path.exists():
+        raw = log_path.read_text().splitlines()[-1000:]
+        for line in reversed(raw):
+            line = line.strip()
+            if not line:
+                continue
+            level = "INFO"
+            if "ERROR"    in line: level = "ERROR"
+            elif "WARNING" in line: level = "WARNING"
+            elif "change detected" in line.lower(): level = "CHANGE"
+            elif "baseline saved"  in line.lower(): level = "BASELINE"
+            elif "Checking:"       in line:         level = "CHECKING"
+            try:
+                ts_display = datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S") \
+                               .replace(tzinfo=ZoneInfo("UTC")) \
+                               .astimezone(DISPLAY_TZ) \
+                               .strftime("%Y-%m-%d %H:%M:%S")
+                message = line[20:].strip()
+            except Exception:
+                ts_display, message = "", line
+            lines.append({"ts": ts_display, "level": level, "message": message})
+
+    # Collapse consecutive identical messages
+    parsed = []
+    for entry in lines:
+        if parsed and parsed[-1]["message"] == entry["message"] and parsed[-1]["level"] == entry["level"]:
+            parsed[-1]["count"] = parsed[-1].get("count", 1) + 1
+        else:
+            entry["count"] = 1
+            parsed.append(entry)
+
+    return render_template("logs.html", lines=parsed)
+
+
+# ── Immediate check ───────────────────────────────────────────────────────────
+
+@app.route("/check-now", methods=["POST"])
+def check_now_all():
+    if _scheduler:
+        from monitor.scheduler import trigger_immediate
+        for site in load_sites():
+            try:
+                trigger_immediate(_scheduler, site)
+            except Exception:
+                pass
+    return jsonify({"status": "dispatched"}), 202
+
+
+@app.route("/check-now/<path:site_name>", methods=["POST"])
+def check_now_one(site_name):
+    if _scheduler:
+        from monitor.scheduler import trigger_immediate
+        for site in load_sites():
+            if site["name"] == site_name:
+                trigger_immediate(_scheduler, site)
+                break
+    return jsonify({"status": "dispatched"}), 202
+
+
+# ── Screenshot API (for clip region selector) ─────────────────────────────────
+
+@app.route("/api/screenshot")
+def api_screenshot():
     """
-    Convert a Flask form submission into a site config dict.
-    Returns (site_dict, error_message).  error_message is "" on success.
+    Takes a full-page screenshot of the given URL and returns it as base64 PNG.
+    Called by the Add/Edit site form to display the page for clip region selection.
     """
-    name = form.get("name", "").strip()
-    url  = form.get("url", "").strip()
-    if not name:
-        return None, "Site name is required."
+    url = request.args.get("url", "").strip()
     if not url:
-        return None, "URL is required."
+        return jsonify({"error": "No URL provided"}), 400
 
-    mode          = form.get("mode", "single_page")
-    schedule_type = form.get("schedule_type", "interval")
+    # Run Playwright in a thread (Flask is synchronous)
+    result = {}
 
-    site = {
+    def _capture():
+        png = take_screenshot_sync(url, clip=None, js_wait=3.0)
+        result["png"] = png
+
+    t = threading.Thread(target=_capture)
+    t.start()
+    t.join(timeout=40)
+
+    if not result.get("png"):
+        return jsonify({"error": "Screenshot failed — check the URL and try again"}), 500
+
+    b64 = base64.b64encode(result["png"]).decode()
+    return jsonify({"image": b64})
+
+
+# ── Site form (add / edit) ─────────────────────────────────────────────────────
+
+@app.route("/site/add")
+def site_add():
+    return render_template("site_form.html", page_title="Add Site",
+                           site=None, error=None)
+
+
+@app.route("/site/edit/<path:site_name>")
+def site_edit(site_name):
+    sites = load_sites()
+    idx   = find_site(sites, site_name)
+    if idx == -1:
+        flash("Site not found")
+        return redirect(url_for("index"))
+    return render_template("site_form.html", page_title=f"Edit — {site_name}",
+                           site=sites[idx], error=None)
+
+
+@app.route("/site/save", methods=["POST"])
+def site_save():
+    form = request.form
+    sites = load_sites()
+
+    name = form.get("name","").strip()
+    url  = form.get("url","").strip()
+    if not name or not url:
+        return render_template("site_form.html", page_title="Add/Edit Site",
+                               site=None, error="Name and URL are required")
+
+    mode = form.get("mode", "screenshot")
+
+    site: dict = {
         "name": name,
         "url":  url,
         "mode": mode,
-        "schedule_type": schedule_type,
         "notify": ["telegram"],
     }
 
-    # Target selector
-    target_sel = form.get("target_selector", "").strip()
-    if target_sel:
-        site["target_selector"] = target_sel
+    # --- Clip region (screenshot mode only) ---
+    if mode == "screenshot":
+        try:
+            cx = int(form.get("clip_x", 0))
+            cy = int(form.get("clip_y", 0))
+            cw = int(form.get("clip_w", 0))
+            ch = int(form.get("clip_h", 0))
+            if cw > 0 and ch > 0:
+                site["clip"] = {"x": cx, "y": cy, "width": cw, "height": ch}
+        except (ValueError, TypeError):
+            pass
 
-    # JSON fields
-    json_fields_raw = form.get("json_fields_raw", "").strip()
-    if json_fields_raw:
-        fields = [f.strip() for f in json_fields_raw.split(",") if f.strip()]
-        if fields:
-            site["json_fields"] = fields
+        langs_raw = form.get("ocr_languages", "en").strip()
+        site["ocr_languages"] = [l.strip() for l in langs_raw.split(",") if l.strip()]
+        site["js_wait"] = float(form.get("js_wait", 3.0))
 
-    # SSL
-    if form.get("ssl_verify") == "false":
-        site["ssl_verify"] = False
+    # --- JSON API fields ---
+    if mode == "json_api":
+        fields_raw = form.get("json_fields_raw", "").strip()
+        if fields_raw:
+            site["json_fields"] = [f.strip() for f in fields_raw.split(",") if f.strip()]
 
-    # JavaScript
-    if form.get("javascript") == "true":
-        site["javascript"] = True
-        js_wait = form.get("js_wait_seconds", "").strip()
-        if js_wait:
-            try:
-                site["js_wait_seconds"] = int(js_wait)
-            except ValueError:
-                pass
+    # --- Schedule ---
+    sched_type = form.get("schedule_type", "interval")
+    site["schedule_type"] = sched_type
 
-    # Timezone (only relevant for time_window but harmless otherwise)
-    tz = form.get("timezone", "").strip()
-    if tz:
-        site["timezone"] = tz
-
-    # Schedule
-    if schedule_type == "interval":
+    if sched_type == "interval":
         try:
             site["interval_minutes"] = int(form.get("interval_minutes", 60))
         except ValueError:
             site["interval_minutes"] = 60
-    else:  # time_window — raw YAML block
-        windows_yaml = form.get("windows_yaml", "").strip()
+    else:
+        windows_yaml = form.get("windows_yaml","").strip()
         if windows_yaml:
             try:
                 parsed = yaml.safe_load(windows_yaml)
                 if isinstance(parsed, list):
                     site["windows"] = parsed
-                else:
-                    return None, "Windows YAML must be a list (starts with -). See the example."
-            except yaml.YAMLError as e:
-                return None, f"Windows YAML parse error: {e}"
-        else:
-            return None, "Time-window schedule requires at least one window. See the example."
+            except Exception as e:
+                return render_template("site_form.html", page_title="Add/Edit Site",
+                                       site=None, error=f"Windows YAML error: {e}")
+        site["timezone"] = form.get("timezone","UTC").strip()
 
-    # Sensitivity
-    try:
-        min_words = int(form.get("min_content_words", 50))
-        site["min_content_words"] = min_words
-    except ValueError:
-        pass
+    # --- SSL ---
+    if form.get("ssl_verify") == "false":
+        site["ssl_verify"] = False
 
-    try:
-        min_pct = float(form.get("min_change_percent", 3))
-        site["min_change_percent"] = min_pct
-    except ValueError:
-        pass
+    # Save / replace
+    idx = find_site(sites, name)
+    if idx >= 0:
+        sites[idx] = site
+    else:
+        sites.append(site)
 
-    # Ignore selectors
-    selectors_raw = form.get("ignore_selectors", "").strip()
-    if selectors_raw:
-        site["ignore_selectors"] = [s.strip() for s in selectors_raw.splitlines() if s.strip()]
-
-    # Crawl settings (whole_site only)
-    if mode == "whole_site":
-        crawl = {}
-        crawl["use_sitemap"]    = form.get("use_sitemap", "true") == "true"
-        crawl["stay_on_domain"] = form.get("stay_on_domain", "true") == "true"
-        try:
-            crawl["max_pages"] = int(form.get("max_pages", 50))
-        except ValueError:
-            crawl["max_pages"] = 50
-        excl_raw = form.get("exclude_patterns", "").strip()
-        if excl_raw:
-            crawl["exclude_patterns"] = [p.strip() for p in excl_raw.splitlines() if p.strip()]
-        site["crawl"] = crawl
-
-    return site, ""
-
-
-# ── Site form template ─────────────────────────────────────────────────────────
-
-
-# ── Site management routes ────────────────────────────────────────────────────
-
-def _trigger_immediate_check(site: dict):
-    """
-    Fire an immediate one-shot check for a site using the running scheduler.
-    Falls back to a background thread if the scheduler is not available
-    (e.g. during testing or when dashboard is run standalone).
-    Called after add/edit so the site gets a baseline or refreshed snapshot
-    without waiting for its next scheduled interval.
-    """
-    # Path 1 — running inside the normal run.py process: use APScheduler
-    try:
-        import run as _run_module
-        sched = getattr(_run_module, "_scheduler", None)
-        if sched is not None and sched.running:
-            from monitor.core import check_site as _cs
-            sched.add_job(
-                _cs,
-                "date",
-                args=[site],
-                id=f"__immediate_{site['name']}",
-                misfire_grace_time=120,
-                replace_existing=True,
-            )
-            return
-    except Exception:
-        pass
-
-    # Path 2 — fallback: fire in a daemon thread
-    import threading, asyncio as _asyncio
-
-    def _run():
-        from monitor.core import check_site as _cs
-        _asyncio.run(_cs(site, force=True))
-
-    threading.Thread(target=_run, daemon=True).start()
-
-
-@app.route("/sites/add", methods=["GET", "POST"])
-def site_add():
-    error = ""
-    site  = {}
-    windows_yaml      = ""
-    ignore_selectors_text = ""
-    exclude_patterns_text = ""
-
-    if request.method == "POST":
-        site, error = form_to_site(request.form)
-        if not error:
-            data = load_yaml_raw()
-            # Check for duplicate name
-            if find_site_index(data["sites"], site["name"]) >= 0:
-                error = f"A site named \"{site['name']}\" already exists. Choose a different name."
-                site = dict(request.form)  # re-populate form
-            else:
-                data["sites"].append(site)
-                save_yaml(data)
-                # Trigger an immediate baseline check via the running scheduler
-                _trigger_immediate_check(site)
-                flash(f"Site \"{site['name']}\" added. Baseline check starting…", "success")
-                return redirect(url_for("index"))
-        else:
-            # Re-populate form fields from raw form data on error
-            site = {k: v for k, v in request.form.items()}
-            windows_yaml = request.form.get("windows_yaml", "")
-            ignore_selectors_text = request.form.get("ignore_selectors", "")
-            exclude_patterns_text = request.form.get("exclude_patterns", "")
-
-    return render_template(
-        "site_form.html",
-        page_title="Add Site",
-        site=site,
-        error=error,
-        windows_yaml=windows_yaml,
-        ignore_selectors_text=ignore_selectors_text,
-        exclude_patterns_text=exclude_patterns_text,
-        crawl_use_sitemap=True,
-        crawl_stay_on_domain=True,
-        crawl_max_pages=50,
-    )
-
-
-@app.route("/sites/edit/<path:site_name>", methods=["GET", "POST"])
-def site_edit(site_name):
-    data  = load_yaml_raw()
-    idx   = find_site_index(data["sites"], site_name)
-    error = ""
-
-    if idx < 0:
-        flash(f"Site \"{site_name}\" not found.", "error")
-        return redirect(url_for("index"))
-
-    existing = data["sites"][idx]
-
-    if request.method == "POST":
-        new_site, error = form_to_site(request.form)
-        if not error:
-            # If name changed, check it is not a duplicate of another site
-            if new_site["name"] != site_name:
-                other_idx = find_site_index(data["sites"], new_site["name"])
-                if other_idx >= 0 and other_idx != idx:
-                    error = f"A site named \"{new_site['name']}\" already exists."
-
-            if not error:
-                # Rename in DB if name changed
-                if new_site["name"] != site_name:
-                    import sqlite3 as _sq
-                    with _sq.connect(DB) as conn:
-                        for tbl in ("snapshots", "changes", "job_log"):
-                            conn.execute(
-                                f"UPDATE {tbl} SET site_name=? WHERE site_name=?",
-                                (new_site["name"], site_name)
-                            )
-                        conn.commit()
-                data["sites"][idx] = new_site
-                save_yaml(data)
-                # Re-check immediately so any URL/settings change takes effect now
-                _trigger_immediate_check(new_site)
-                flash(f"Site \"{new_site['name']}\" updated. Re-checking now…", "success")
-                return redirect(url_for("index"))
-
-        # Re-populate on error
-        existing = {k: v for k, v in request.form.items()}
-
-    # Build pre-fill values for special fields
-    windows_yaml = ""
-    if existing.get("schedule_type") == "time_window":
-        wins = existing.get("windows", [])
-        if wins:
-            windows_yaml = yaml.dump(wins, default_flow_style=False).strip()
-
-    ignore_selectors_text = "\n".join(existing.get("ignore_selectors", []))
-    crawl = existing.get("crawl", {})
-    exclude_patterns_text = "\n".join(crawl.get("exclude_patterns", []))
-
-    return render_template(
-        "site_form.html",
-        page_title=f"Edit Site — {site_name}",
-        site=existing,
-        error=error,
-        windows_yaml=windows_yaml,
-        ignore_selectors_text=ignore_selectors_text,
-        exclude_patterns_text=exclude_patterns_text,
-        crawl_use_sitemap=crawl.get("use_sitemap", True),
-        crawl_stay_on_domain=crawl.get("stay_on_domain", True),
-        crawl_max_pages=crawl.get("max_pages", 50),
-    )
-
-
-@app.route("/sites/delete/<path:site_name>", methods=["POST"])
-def site_delete(site_name):
-    data = load_yaml_raw()
-    idx  = find_site_index(data["sites"], site_name)
-    if idx < 0:
-        flash(f"Site \"{site_name}\" not found.", "error")
-        return redirect(url_for("index"))
-    data["sites"].pop(idx)
-    save_yaml(data)
-    flash(f"Site \"{site_name}\" deleted.", "success")
+    save_sites(sites)
+    flash(f"Site \"{name}\" saved.")
     return redirect(url_for("index"))
 
 
-def start_dashboard():
-    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+@app.route("/site/delete/<path:site_name>", methods=["POST"])
+def site_delete(site_name):
+    sites = load_sites()
+    idx   = find_site(sites, site_name)
+    if idx >= 0:
+        sites.pop(idx)
+        save_sites(sites)
+        flash(f"Site \"{site_name}\" deleted.")
+    return redirect(url_for("index"))
+
+
+# ── App factory ───────────────────────────────────────────────────────────────
+
+def create_app():
+    return app
+
+
+def start_dashboard(host="0.0.0.0", port=5000, debug=False):
+    app.run(host=host, port=port, debug=debug, use_reloader=False)
