@@ -35,6 +35,9 @@ from monitor.capture  import take_screenshot_sync
 app = Flask(__name__, template_folder="templates")
 app.secret_key = "webmonitor-secret-key-change-me"
 
+# Custom Jinja2 filter: render a Python object as YAML (used in site_form.html)
+app.jinja_env.filters["toyaml"] = lambda v: yaml.dump(v, default_flow_style=False, allow_unicode=True) if v else ""
+
 CONFIG      = "config/sites.yaml"
 DISPLAY_TZ  = ZoneInfo("Europe/London")
 
