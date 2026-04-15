@@ -6,8 +6,9 @@ python-dotenv>=1.0.0
 PyYAML>=6.0
 selenium>=4.0.0
 pytesseract>=0.3.13
-aiohttp>=3.9.0
+requests>=2.0.0
 
-# System packages (install once with apt):
+# System packages (install once):
 #   sudo apt install chromium-browser chromium-driver
 #   sudo apt install tesseract-ocr
+#   sudo apt install tesseract-ocr-rus   # if monitoring Russian/Cyrillic pages
