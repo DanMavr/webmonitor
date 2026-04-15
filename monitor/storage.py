@@ -1,63 +1,56 @@
 """
-storage.py — minimal two-file-per-site storage.
+storage.py — file + SQLite storage.
 
 Layout:
-  data/sites/<safe_name>/baseline.png        ← last known screenshot crop
-  data/sites/<safe_name>/baseline_text.txt   ← OCR text of that screenshot
-  data/changes.db                            ← SQLite change + job history
-  data/activity.log
-  data/monitor.log
+  data/sites/<safe_name>/baseline.png       — last known screenshot
+  data/sites/<safe_name>/baseline_text.txt  — OCR text of baseline
+  data/changes.db                           — SQLite change + job history
 """
 from __future__ import annotations
 
-import sqlite3
 import re
+import sqlite3
 import logging
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("monitor")
 
-DB        = str(Path(__file__).parent.parent / "data" / "changes.db")
-SITES_DIR = Path(__file__).parent.parent / "data" / "sites"
+_ROOT     = Path(__file__).parent.parent
+DB        = str(_ROOT / "data" / "changes.db")
+SITES_DIR = _ROOT / "data" / "sites"
 
-
-# ── Initialisation ────────────────────────────────────────────────────────────
 
 def init_db():
-    Path("data").mkdir(exist_ok=True)
+    (_ROOT / "data").mkdir(exist_ok=True)
     SITES_DIR.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB)
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS changes (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            site_name   TEXT    NOT NULL,
-            timestamp   TEXT    NOT NULL,
-            added       TEXT,
-            removed     TEXT,
-            summary     TEXT
-        );
-        CREATE TABLE IF NOT EXISTS job_log (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            site_name   TEXT NOT NULL,
-            timestamp   TEXT NOT NULL,
-            status      TEXT NOT NULL,
-            detail      TEXT
-        );
-    """)
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(DB) as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS changes (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_name TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                added     TEXT,
+                removed   TEXT,
+                summary   TEXT
+            );
+            CREATE TABLE IF NOT EXISTS job_log (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_name TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                status    TEXT NOT NULL,
+                detail    TEXT
+            );
+        """)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _safe_name(name: str) -> str:
+def _safe(name: str) -> str:
     return re.sub(r"[^a-z0-9_-]", "_", name.lower())
 
 
 def _site_dir(name: str) -> Path:
-    d = SITES_DIR / _safe_name(name)
+    d = SITES_DIR / _safe(name)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -66,103 +59,85 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# ── Baseline read/write ───────────────────────────────────────────────────────
+# ── Baseline ──────────────────────────────────────────────────────────────────
 
-def load_baseline(site_name: str) -> tuple:
-    """Return (png_bytes, text) for the stored baseline, or (None, "")."""
-    d         = _site_dir(site_name)
-    png_path  = d / "baseline.png"
-    text_path = d / "baseline_text.txt"
-    png  = png_path.read_bytes()  if png_path.exists()  else None
-    text = text_path.read_text()  if text_path.exists() else ""
+def load_baseline(name: str) -> tuple[Optional[bytes], str]:
+    d = _site_dir(name)
+    png  = (d / "baseline.png").read_bytes()  if (d / "baseline.png").exists()  else None
+    text = (d / "baseline_text.txt").read_text() if (d / "baseline_text.txt").exists() else ""
     return png, text
 
 
-def save_baseline(site_name: str, png_bytes: bytes, text: str):
-    """Overwrite the baseline with the new screenshot and OCR text."""
-    d = _site_dir(site_name)
-    if png_bytes:
-        (d / "baseline.png").write_bytes(png_bytes)
+def save_baseline(name: str, png: bytes, text: str):
+    d = _site_dir(name)
+    if png:
+        (d / "baseline.png").write_bytes(png)
     (d / "baseline_text.txt").write_text(text)
 
 
-def baseline_exists(site_name: str) -> bool:
-    return (_site_dir(site_name) / "baseline.png").exists()
-
-
-def get_baseline_png_path(site_name: str) -> Optional[Path]:
-    p = _site_dir(site_name) / "baseline.png"
+def get_baseline_png_path(name: str) -> Optional[Path]:
+    p = _site_dir(name) / "baseline.png"
     return p if p.exists() else None
 
 
-# ── Job log ───────────────────────────────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────────
 
-def log_job(site_name: str, status: str, detail: str = ""):
+def log_job(name: str, status: str, detail: str = ""):
     try:
-        conn = sqlite3.connect(DB)
-        conn.execute(
-            "INSERT INTO job_log (site_name, timestamp, status, detail) VALUES (?,?,?,?)",
-            (site_name, _now(), status, detail),
-        )
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(DB) as conn:
+            conn.execute(
+                "INSERT INTO job_log (site_name,timestamp,status,detail) VALUES (?,?,?,?)",
+                (name, _now(), status, detail)
+            )
     except Exception as e:
-        logger.error(f"log_job failed: {e}")
+        logger.error(f"log_job: {e}")
 
 
-# ── Change history ────────────────────────────────────────────────────────────
-
-def log_change(site_name: str, diff: dict):
+def log_change(name: str, diff: dict):
     try:
-        conn = sqlite3.connect(DB)
-        conn.execute(
-            "INSERT INTO changes (site_name, timestamp, added, removed, summary) VALUES (?,?,?,?,?)",
-            (
-                site_name,
-                _now(),
-                "\n".join(diff["added"]),
-                "\n".join(diff["removed"]),
-                diff["summary"],
-            ),
-        )
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(DB) as conn:
+            conn.execute(
+                "INSERT INTO changes (site_name,timestamp,added,removed,summary) VALUES (?,?,?,?,?)",
+                (name, _now(),
+                 "\n".join(diff.get("added",[])),
+                 "\n".join(diff.get("removed",[])),
+                 diff.get("summary",""))
+            )
     except Exception as e:
-        logger.error(f"log_change failed: {e}")
+        logger.error(f"log_change: {e}")
 
 
-def get_recent_changes(limit: int = 100) -> list:
+# ── Queries ───────────────────────────────────────────────────────────────────
+
+def get_recent_changes(limit: int = 100) -> list[dict]:
     try:
-        conn = sqlite3.connect(DB)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT * FROM changes ORDER BY timestamp DESC LIMIT ?", (limit,)
-        ).fetchall()
-        conn.close()
+        with sqlite3.connect(DB) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM changes ORDER BY timestamp DESC LIMIT ?", (limit,)
+            ).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []
 
 
-def get_site_stats(site_name: str) -> dict:
+def get_site_stats(name: str) -> dict:
     try:
-        conn = sqlite3.connect(DB)
-        conn.row_factory = sqlite3.Row
-
-        last_check = conn.execute(
-            "SELECT timestamp, status FROM job_log WHERE site_name=? ORDER BY timestamp DESC LIMIT 1",
-            (site_name,),
-        ).fetchone()
-
-        total_changes = conn.execute(
-            "SELECT COUNT(*) FROM changes WHERE site_name=?", (site_name,)
-        ).fetchone()[0]
-
-        conn.close()
+        with sqlite3.connect(DB) as conn:
+            conn.row_factory = sqlite3.Row
+            last = conn.execute(
+                "SELECT status, timestamp, detail FROM job_log "
+                "WHERE site_name=? ORDER BY timestamp DESC LIMIT 1", (name,)
+            ).fetchone()
+            total = conn.execute(
+                "SELECT COUNT(*) FROM changes WHERE site_name=?", (name,)
+            ).fetchone()[0]
         return {
-            "last_check":    last_check["timestamp"] if last_check else None,
-            "last_status":   last_check["status"]    if last_check else None,
-            "total_changes": total_changes,
+            "last_status":    last["status"]    if last else None,
+            "last_check":     last["timestamp"] if last else None,
+            "last_detail":    last["detail"]    if last else "",
+            "total_changes":  total,
         }
     except Exception:
-        return {"last_check": None, "last_status": None, "total_changes": 0}
+        return {"last_status": None, "last_check": None,
+                "last_detail": "", "total_changes": 0}
