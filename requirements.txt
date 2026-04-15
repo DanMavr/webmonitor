@@ -15,6 +15,9 @@ python-telegram-bot>=20.0
 # HTTP (JSON API sites e.g. LSE RNS)
 aiohttp>=3.9.0
 
+# Timezone data (required on minimal Raspberry Pi OS installs)
+tzdata>=2024.1
+
 # Config & env
 python-dotenv>=1.0.0
 PyYAML>=6.0
