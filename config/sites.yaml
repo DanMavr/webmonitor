@@ -1,14 +1,3 @@
-# sites.yaml — WebMonitor configuration
-#
-# Each site needs only 4 things:
-#   name, url, clip (set via dashboard), schedule_minutes
-#
-# mode: screenshot  (default) — uses Playwright + EasyOCR
-# mode: json_api              — direct JSON field comparison (for APIs like LSE)
-#
-# clip: set this via the dashboard Add/Edit form (drag-to-select).
-#       If omitted, the full page is monitored.
-
 sites:
 
   # ── LSE RNS — keep as JSON API (runs every 1 min, no screenshot needed) ───
